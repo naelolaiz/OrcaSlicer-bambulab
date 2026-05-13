@@ -363,6 +363,7 @@ jobs:
       ORCA_UPDATER_SIG_KEY: ${{ secrets.ORCA_UPDATER_SIG_KEY }}
       SCCACHE_GHA_ENABLED: "true"
       CMAKE_COMPILER_LAUNCHER: sccache
+      CMAKE_BUILD_PARALLEL_LEVEL: "2"
 
     steps:
       - *checkout
@@ -396,10 +397,10 @@ jobs:
 
       - name: Build macOS deps
         if: ${{ steps.cache_macos_deps.outputs.cache-hit != 'true' }}
-        run: ./build_release_macos.sh -dx -1 -a ${{ matrix.arch }} -t 11.3
+        run: ./build_release_macos.sh -dx -a ${{ matrix.arch }} -t 11.3
 
       - name: Build macOS app bundle
-        run: ./build_release_macos.sh -s -n -x -1 -a ${{ matrix.arch }} -t 11.3
+        run: ./build_release_macos.sh -s -n -x -a ${{ matrix.arch }} -t 11.3
 
       - name: Pack macOS app bundle
         run: cmake -E chdir build/${{ matrix.arch }} cmake -E tar czf "$GITHUB_WORKSPACE/OrcaSlicer_Mac_bundle_${{ matrix.arch }}_${{ github.sha }}.tar.gz" --format=gnutar OrcaSlicer
