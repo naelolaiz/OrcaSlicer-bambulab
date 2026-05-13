@@ -330,6 +330,10 @@ if (MSVC)
     # /bigobj (Increase Number of Sections in .Obj file)
     # error C3859: virtual memory range for PCH exceeded; please recompile with a command line option of '-Zm90' or greater
     # Generate symbols at every build target, even for the release.
+    # /Zi (not /Z7): /Z7 embeds debug info in every .obj and pushes
+    # libslic3r_gui.lib past the 4 GB COFF archive limit (LNK1248).
+    # That blocks sccache caching on Windows but is required for the
+    # current static-library layout.
     add_compile_options(-bigobj -Zm520 /Zi)
     # Disable STL4007: Many result_type typedefs and all argument_type, first_argument_type, and second_argument_type typedefs are deprecated in C++17.
     #FIXME Remove this line after eigen library adapts to the new C++17 adaptor rules.
