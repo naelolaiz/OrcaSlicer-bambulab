@@ -154,32 +154,6 @@ jobs:
             ${CMAKE_COMPILER_LAUNCHER:+-DCMAKE_C_COMPILER_LAUNCHER="$CMAKE_COMPILER_LAUNCHER" -DCMAKE_CXX_COMPILER_LAUNCHER="$CMAKE_COMPILER_LAUNCHER"}
           cmake --build deps/build
 
-  linux_tests:
-    name: Linux tests
-    needs: linux_deps
-    runs-on: ubuntu-24.04
-    timeout-minutes: 360
-    env:
-      ORCA_DIST_ID: ubuntu24.04
-      SCCACHE_GHA_ENABLED: "true"
-      CMAKE_COMPILER_LAUNCHER: sccache
-
-    steps:
-      - *checkout
-      - *setup_cmake
-      - *setup_sccache
-      - *apt_deps
-      - *cache_deps
-      - *build_deps_if_miss
-
-      - name: Build tests
-        run: |
-          cmake -E rm -rf build/pr
-          cmake --workflow --preset linux-pr-tests
-
-      - name: Run tests
-        run: ctest --preset linux-pr
-
   linux:
     name: Linux ${{ matrix.kind }} (${{ matrix.dist_id }})
     needs: linux_deps
@@ -240,6 +214,14 @@ jobs:
           name: ${{ matrix.artifact }}-${{ matrix.dist_id }}-${{ github.sha }}
           path: out/
           if-no-files-found: error
+
+      - name: Build unit tests
+        if: matrix.kind == 'AppImage'
+        run: cmake --workflow --preset linux-bmcu-tests
+
+      - name: Run unit tests
+        if: matrix.kind == 'AppImage'
+        run: ctest --preset linux-bmcu-tests
 
   rpm_fedora41:
     name: RPM (fedora41)

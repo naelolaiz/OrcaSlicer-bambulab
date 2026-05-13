@@ -16,7 +16,9 @@ cmake -S . -B build -DCMAKE_BUILD_TYPE=RelWithDebInfo
 cmake --build build --config RelWithDebInfo --target all --parallel
 ```
 
-Linux system dependencies are installed with `./build_linux.sh -u`; use `./build_linux.sh -g -istrlL` for a GitHub Actions-like Linux container build. Release packaging is driven by the CMake workflow/package presets in `CMakePresets.json`; macOS and Windows helpers still set platform toolchain defaults around the same CMake/CPack flow.
+Pass `-DBUILD_TESTS=ON` (or use the `linux-bmcu-tests` workflow preset) to compile the Catch2 unit tests; they are off by default.
+
+Linux system dependencies are installed with `./build_linux.sh -u`; use `./build_linux.sh -g -istrlL` for a GitHub Actions-like Linux container build. Release packaging is driven by the CMake workflow/package presets in `CMakePresets.json`; macOS and Windows helpers still set platform toolchain defaults around the same CMake/CPack flow. CI honours a `CMAKE_COMPILER_LAUNCHER` env var (set to `sccache` in GitHub Actions) and forwards it into the presets and `build_release_macos.sh` so incremental rebuilds reuse cached objects.
 
 ### Build System
 - Uses CMake with minimum version 3.13; CI packaging presets require CMake 3.25 or newer
@@ -41,24 +43,13 @@ Tests are located in the `tests/` directory and use the Catch2 testing framework
 - `tests/slic3rutils/` - Utility function tests
 - `tests/sandboxes/` - Experimental/sandbox test code
 
-Run all tests after building:
+Build the tests against the same binary tree as the BMCU release and run them:
 ```bash
-cd build && ctest
+cmake --workflow --preset linux-bmcu-tests
+ctest --preset linux-bmcu-tests
 ```
 
-Run tests with verbose output:
-```bash
-cd build && ctest --output-on-failure
-```
-
-Run individual test suites:
-```bash
-# From build directory
-ctest --test-dir ./tests/libslic3r/libslic3r_tests
-ctest --test-dir ./tests/fff_print/fff_print_tests
-ctest --test-dir ./tests/sla_print/sla_print_tests
-# and so on
-```
+For a manual non-preset build, configure with `-DBUILD_TESTS=ON` and run `ctest --test-dir build --output-on-failure`. Filter individual suites with `ctest -R libslic3r` (or any other suite name).
 
 ## Architecture
 

@@ -15,24 +15,6 @@
       }
     },
     {
-      "name": "linux-pr",
-      "displayName": "Linux PR validation",
-      "generator": "Ninja Multi-Config",
-      "binaryDir": "${sourceDir}/build/pr",
-      "cacheVariables": {
-        "CMAKE_C_COMPILER_LAUNCHER": "$env{CMAKE_COMPILER_LAUNCHER}",
-        "CMAKE_CXX_COMPILER_LAUNCHER": "$env{CMAKE_COMPILER_LAUNCHER}",
-        "CMAKE_PREFIX_PATH": "${sourceDir}/deps/build/OrcaSlicer_dep/usr/local",
-        "SLIC3R_STATIC": true,
-        "SLIC3R_GTK": "3",
-        "BBL_RELEASE_TO_PUBLIC": false,
-        "BBL_INTERNAL_TESTING": false,
-        "SLIC3R_PCH": true,
-        "ORCA_TOOLS": true,
-        "BUILD_TESTS": true
-      }
-    },
-    {
       "name": "linux-bmcu-base",
       "hidden": true,
       "generator": "Ninja Multi-Config",
@@ -69,6 +51,14 @@
       }
     },
     {
+      "name": "linux-bmcu-amd64-tests",
+      "inherits": "linux-bmcu-amd64",
+      "displayName": "Linux BMCU amd64 with unit tests",
+      "cacheVariables": {
+        "BUILD_TESTS": true
+      }
+    },
+    {
       "name": "linux-bridge-runtime",
       "displayName": "Linux bridge runtime",
       "generator": "Ninja Multi-Config",
@@ -96,8 +86,14 @@
       ]
     },
     {
-      "name": "linux-pr-tests",
-      "configurePreset": "linux-pr",
+      "name": "linux-bmcu",
+      "configurePreset": "linux-bmcu-amd64",
+      "configuration": "Release",
+      "jobs": 0
+    },
+    {
+      "name": "linux-bmcu-tests",
+      "configurePreset": "linux-bmcu-amd64-tests",
       "configuration": "Release",
       "targets": [
         "libnest2d_tests",
@@ -106,12 +102,6 @@
         "fff_print_tests",
         "sla_print_tests"
       ],
-      "jobs": 0
-    },
-    {
-      "name": "linux-bmcu",
-      "configurePreset": "linux-bmcu-amd64",
-      "configuration": "Release",
       "jobs": 0
     },
     {
@@ -142,8 +132,8 @@
   ],
   "testPresets": [
     {
-      "name": "linux-pr",
-      "configurePreset": "linux-pr",
+      "name": "linux-bmcu-tests",
+      "configurePreset": "linux-bmcu-amd64-tests",
       "configuration": "Release",
       "output": {
         "outputOnFailure": true
@@ -261,16 +251,16 @@
       ]
     },
     {
-      "name": "linux-pr-tests",
-      "displayName": "Build Linux PR test binaries",
+      "name": "linux-bmcu-tests",
+      "displayName": "Build Linux BMCU unit tests",
       "steps": [
         {
           "type": "configure",
-          "name": "linux-pr"
+          "name": "linux-bmcu-amd64-tests"
         },
         {
           "type": "build",
-          "name": "linux-pr-tests"
+          "name": "linux-bmcu-tests"
         }
       ]
     },
