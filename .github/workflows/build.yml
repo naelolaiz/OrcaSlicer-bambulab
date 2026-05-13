@@ -1,0 +1,599 @@
+name: Build
+
+on:
+  workflow_call:
+  workflow_dispatch:
+  pull_request:
+    branches:
+      - main
+  push:
+    branches:
+      - main
+      - 'release/**'
+    tags:
+      - 'v*'
+  release:
+    types:
+      - published
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: bash
+
+env:
+  ORCA_UPDATER_SIG_KEY: ${{ secrets.ORCA_UPDATER_SIG_KEY }}
+
+concurrency:
+  group: build-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  script_checks:
+    name: Script checks
+    runs-on: ubuntu-24.04
+    steps:
+      - &checkout
+        name: Checkout
+        uses: actions/checkout@v6
+        with:
+          lfs: false
+
+      - name: Install ShellCheck
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y shellcheck
+
+      - name: Check shell scripts
+        run: find . -not -name '*.md' \( -path './scripts/linux.d/*' -o -name '*.sh' \) -print0 | xargs -0 shellcheck
+
+      - name: Check Python scripts
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          for path in Path('scripts').glob('*.py'):
+              compile(path.read_text(encoding='utf-8'), str(path), 'exec')
+          PY
+
+  profile_checks:
+    name: Profile checks
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-24.04
+    steps:
+      - *checkout
+
+      - name: Detect profile changes
+        id: profile_changes
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          git fetch --no-tags --depth=1 origin "$BASE_SHA"
+          if git diff --name-only "$BASE_SHA" HEAD -- resources/profiles scripts/orca_extra_profile_check.py | grep -q .; then
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            echo "No bundled profile changes; profile validation is skipped."
+          fi
+
+      - name: Check profile JSON metadata
+        if: steps.profile_changes.outputs.changed == 'true'
+        run: python3 scripts/orca_extra_profile_check.py
+
+      - name: Download profile validator
+        if: steps.profile_changes.outputs.changed == 'true'
+        run: |
+          curl -fsSLo OrcaSlicer_profile_validator https://github.com/SoftFever/Orca_tools/releases/download/1/OrcaSlicer_profile_validator
+          chmod +x OrcaSlicer_profile_validator
+
+      - name: Validate bundled profiles
+        if: steps.profile_changes.outputs.changed == 'true'
+        run: ./OrcaSlicer_profile_validator -p "$GITHUB_WORKSPACE/resources/profiles" -l 2
+
+      - name: Validate profiles with custom preset fixtures
+        if: steps.profile_changes.outputs.changed == 'true'
+        run: |
+          curl -fsSLo orca_custom_preset_tests.zip https://github.com/OrcaSlicer/OrcaSlicer/releases/download/nightly-builds/orca_custom_preset_tests.zip
+          unzip -q orca_custom_preset_tests.zip -d "$GITHUB_WORKSPACE/resources/profiles"
+          ./OrcaSlicer_profile_validator -p "$GITHUB_WORKSPACE/resources/profiles" -l 2
+
+  linux_deps:
+    name: Linux deps (${{ matrix.dist_id }})
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 360
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-22.04
+            dist_id: ubuntu22.04
+          - runner: ubuntu-24.04
+            dist_id: ubuntu24.04
+    env:
+      ORCA_DIST_ID: ${{ matrix.dist_id }}
+      SCCACHE_GHA_ENABLED: "true"
+      CMAKE_COMPILER_LAUNCHER: sccache
+
+    steps:
+      - *checkout
+
+      - &setup_cmake
+        name: Set up CMake
+        uses: lukka/get-cmake@v4.3.2
+        with:
+          cmakeVersion: "~4.3.0"
+          useLocalCache: true
+          useCloudCache: true
+
+      - &setup_sccache
+        name: Set up sccache
+        uses: mozilla-actions/sccache-action@v0.0.10
+
+      - &apt_deps
+        name: Install system dependencies
+        run: |
+          mkdir -p "$GITHUB_WORKSPACE/deps/build/OrcaSlicer_dep"
+          sudo env "ORCA_UPDATER_SIG_KEY=$ORCA_UPDATER_SIG_KEY" ./build_linux.sh -ur
+          sudo chown "$USER" -R ./
+
+      - &cache_deps
+        name: Cache dependencies
+        id: cache_deps
+        uses: actions/cache@v5
+        with:
+          path: ${{ github.workspace }}/deps/build/OrcaSlicer_dep
+          key: linux-${{ env.ORCA_DIST_ID }}-deps-${{ hashFiles('deps/**', '!deps/build/**') }}-v1
+
+      - &build_deps_if_miss
+        name: Build dependencies
+        if: ${{ steps.cache_deps.outputs.cache-hit != 'true' }}
+        run: &build_deps |
+          cmake -S deps -B deps/build -G Ninja \
+            -DCMAKE_POLICY_VERSION_MINIMUM=3.5 \
+            ${CMAKE_COMPILER_LAUNCHER:+-DCMAKE_C_COMPILER_LAUNCHER="$CMAKE_COMPILER_LAUNCHER" -DCMAKE_CXX_COMPILER_LAUNCHER="$CMAKE_COMPILER_LAUNCHER"}
+          cmake --build deps/build
+
+  linux:
+    name: Linux ${{ matrix.kind }} (${{ matrix.dist_id }})
+    needs: linux_deps
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 360
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - kind: AppImage
+            runner: ubuntu-24.04
+            dist_id: ubuntu24.04
+            preset: linux-bmcu-appimage
+            artifact: orcaslicer-bmcu-linux-appimage
+          - kind: portable
+            runner: ubuntu-22.04
+            dist_id: ubuntu22.04
+            preset: linux-bmcu-portable
+            artifact: orcaslicer-bmcu-linux
+          - kind: portable
+            runner: ubuntu-24.04
+            dist_id: ubuntu24.04
+            preset: linux-bmcu-portable
+            artifact: orcaslicer-bmcu-linux
+    env:
+      ORCA_DIST_ID: ${{ matrix.dist_id }}
+      EVENT_TAG: ${{ github.event.release.tag_name }}
+      SCCACHE_GHA_ENABLED: "true"
+      CMAKE_COMPILER_LAUNCHER: sccache
+
+    steps:
+      - *checkout
+
+      - *setup_cmake
+
+      - *setup_sccache
+
+      - *apt_deps
+
+      - name: Install package tools
+        if: ${{ matrix.kind == 'portable' }}
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y dpkg-dev fakeroot binutils
+
+      - *cache_deps
+
+      - *build_deps_if_miss
+
+      - name: Build package
+        run: |
+          cmake -E rm -rf build out
+          cmake --workflow --preset "${{ matrix.preset }}"
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v7
+        with:
+          name: ${{ matrix.artifact }}-${{ matrix.dist_id }}-${{ github.sha }}
+          path: out/
+          if-no-files-found: error
+
+      - name: Build unit tests
+        if: matrix.kind == 'AppImage'
+        run: cmake --workflow --preset linux-bmcu-tests
+
+      - name: Run unit tests
+        if: matrix.kind == 'AppImage'
+        run: ctest --preset linux-bmcu-tests
+
+  rpm_fedora41:
+    name: RPM (fedora41)
+    runs-on: ubuntu-24.04
+    container:
+      image: fedora:41
+    timeout-minutes: 360
+    env:
+      ORCA_DIST_ID: fedora41
+      EVENT_TAG: ${{ github.event.release.tag_name }}
+      SCCACHE_GHA_ENABLED: "true"
+      CMAKE_COMPILER_LAUNCHER: sccache
+
+    steps:
+      - *checkout
+
+      - name: Install system tools
+        run: |
+          dnf install -y \
+            bash \
+            ca-certificates \
+            sudo \
+            tar \
+            which
+
+      - name: Install build dependencies
+        run: ./build_linux.sh -u
+
+      - *setup_sccache
+
+      - name: Cache dependencies
+        id: cache_deps
+        uses: actions/cache@v5
+        with:
+          path: ${{ github.workspace }}/deps/build/OrcaSlicer_dep
+          key: linux-${{ env.ORCA_DIST_ID }}-deps-${{ hashFiles('deps/**', '!deps/build/**') }}-v1
+
+      - name: Build dependencies
+        if: ${{ steps.cache_deps.outputs.cache-hit != 'true' }}
+        run: *build_deps
+
+      - name: Build RPM
+        run: |
+          cmake -E rm -rf build out
+          cmake --workflow --preset linux-bmcu-rpm
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v7
+        with:
+          name: orcaslicer-bmcu-rpm-fedora41-${{ github.sha }}
+          path: out/
+          if-no-files-found: error
+
+  linux_bridge_runtime:
+    name: Linux bridge runtime
+    needs: linux_deps
+    runs-on: ubuntu-24.04
+    timeout-minutes: 180
+    env:
+      ORCA_DIST_ID: ubuntu24.04
+      SCCACHE_GHA_ENABLED: "true"
+      CMAKE_COMPILER_LAUNCHER: sccache
+
+    steps:
+      - *checkout
+
+      - name: Cache bridge runtime tarballs
+        id: cache_bridge
+        uses: actions/cache@v5
+        with:
+          path: |
+            linux_host_runtime.tar.gz
+            wsl_rootfs.tar.gz
+          key: linux-bridge-${{ hashFiles('tools/pjarczak_bambu_linux_host/**', 'tools/pjarczak_bambu_runtime/rootfs/**', 'src/slic3r/Utils/PJarczakLinuxBridge/**') }}-v1
+
+      - name: Set up CMake
+        if: steps.cache_bridge.outputs.cache-hit != 'true'
+        uses: lukka/get-cmake@v4.3.2
+        with:
+          cmakeVersion: "~4.3.0"
+          useLocalCache: true
+          useCloudCache: true
+
+      - name: Set up sccache
+        if: steps.cache_bridge.outputs.cache-hit != 'true'
+        uses: mozilla-actions/sccache-action@v0.0.10
+
+      - name: Install system dependencies
+        if: steps.cache_bridge.outputs.cache-hit != 'true'
+        run: |
+          mkdir -p "$GITHUB_WORKSPACE/deps/build/OrcaSlicer_dep"
+          sudo env "ORCA_UPDATER_SIG_KEY=$ORCA_UPDATER_SIG_KEY" ./build_linux.sh -ur
+          sudo chown "$USER" -R ./
+
+      - name: Cache dependencies
+        if: steps.cache_bridge.outputs.cache-hit != 'true'
+        id: cache_deps
+        uses: actions/cache@v5
+        with:
+          path: ${{ github.workspace }}/deps/build/OrcaSlicer_dep
+          key: linux-${{ env.ORCA_DIST_ID }}-deps-${{ hashFiles('deps/**', '!deps/build/**') }}-v1
+
+      - name: Build dependencies
+        if: ${{ steps.cache_bridge.outputs.cache-hit != 'true' && steps.cache_deps.outputs.cache-hit != 'true' }}
+        run: *build_deps
+
+      - name: Build runtime archives
+        if: steps.cache_bridge.outputs.cache-hit != 'true'
+        run: |
+          cmake -E rm -rf build linux_host_runtime.tar.gz wsl_rootfs.tar.gz
+          cmake --workflow --preset linux-bridge-runtime
+
+      - name: Upload Linux host runtime
+        uses: actions/upload-artifact@v7
+        with:
+          name: linux_host_runtime_${{ github.sha }}
+          path: linux_host_runtime.tar.gz
+          if-no-files-found: error
+
+      - name: Upload WSL rootfs
+        uses: actions/upload-artifact@v7
+        with:
+          name: wsl_rootfs_${{ github.sha }}
+          path: wsl_rootfs.tar.gz
+          if-no-files-found: error
+
+  build_macos_arch:
+    name: macOS ${{ matrix.arch }}
+    needs: linux_bridge_runtime
+    runs-on: macos-14
+    timeout-minutes: 360
+    strategy:
+      fail-fast: false
+      matrix:
+        arch:
+          - arm64
+          - x86_64
+    env:
+      ORCA_UPDATER_SIG_KEY: ${{ secrets.ORCA_UPDATER_SIG_KEY }}
+      SCCACHE_GHA_ENABLED: "true"
+      CMAKE_COMPILER_LAUNCHER: sccache
+      CMAKE_BUILD_PARALLEL_LEVEL: "2"
+
+    steps:
+      - *checkout
+
+      - *setup_cmake
+
+      - *setup_sccache
+
+      - name: Download Linux host runtime
+        uses: actions/download-artifact@v8
+        with:
+          name: linux_host_runtime_${{ github.sha }}
+          path: ${{ github.workspace }}/linux_host_runtime_artifact
+
+      - name: Extract Linux host runtime
+        run: |
+          mkdir -p "$GITHUB_WORKSPACE/tools/pjarczak_bambu_linux_host/runtime"
+          tar -xzf "$GITHUB_WORKSPACE/linux_host_runtime_artifact/linux_host_runtime.tar.gz" -C "$GITHUB_WORKSPACE/tools/pjarczak_bambu_linux_host/runtime"
+
+      - name: Install macOS tools
+        run: |
+          brew install automake texinfo libtool
+          mkdir -p "$GITHUB_WORKSPACE/deps/build/${{ matrix.arch }}"
+
+      - name: Cache macOS deps
+        id: cache_macos_deps
+        uses: actions/cache@v5
+        with:
+          path: ${{ github.workspace }}/deps/build/${{ matrix.arch }}
+          key: macos-${{ matrix.arch }}-deps-${{ hashFiles('deps/**', '!deps/build/**') }}-v1
+
+      - name: Build macOS deps
+        if: ${{ steps.cache_macos_deps.outputs.cache-hit != 'true' }}
+        run: ./build_release_macos.sh -dx -a ${{ matrix.arch }} -t 11.3
+
+      - name: Build macOS app bundle
+        run: ./build_release_macos.sh -s -n -x -a ${{ matrix.arch }} -t 11.3
+
+      - name: Pack macOS app bundle
+        run: cmake -E chdir build/${{ matrix.arch }} cmake -E tar czf "$GITHUB_WORKSPACE/OrcaSlicer_Mac_bundle_${{ matrix.arch }}_${{ github.sha }}.tar.gz" --format=gnutar OrcaSlicer
+
+      - name: Upload macOS app bundle
+        uses: actions/upload-artifact@v7
+        with:
+          name: OrcaSlicer_Mac_bundle_${{ matrix.arch }}_${{ github.sha }}
+          path: OrcaSlicer_Mac_bundle_${{ matrix.arch }}_${{ github.sha }}.tar.gz
+          if-no-files-found: error
+
+  build_macos_universal:
+    name: macOS universal
+    needs: build_macos_arch
+    runs-on: macos-14
+    timeout-minutes: 180
+
+    steps:
+      - *checkout
+
+      - *setup_cmake
+
+      - name: Download macOS app bundles
+        uses: actions/download-artifact@v8
+        with:
+          pattern: OrcaSlicer_Mac_bundle_*_${{ github.sha }}
+          path: ${{ github.workspace }}/mac_bundles
+
+      - name: Extract macOS app bundles
+        run: |
+          mkdir -p build/arm64 build/x86_64
+          tar -xzf "$GITHUB_WORKSPACE/mac_bundles/OrcaSlicer_Mac_bundle_arm64_${{ github.sha }}/OrcaSlicer_Mac_bundle_arm64_${{ github.sha }}.tar.gz" -C "$GITHUB_WORKSPACE/build/arm64"
+          tar -xzf "$GITHUB_WORKSPACE/mac_bundles/OrcaSlicer_Mac_bundle_x86_64_${{ github.sha }}/OrcaSlicer_Mac_bundle_x86_64_${{ github.sha }}.tar.gz" -C "$GITHUB_WORKSPACE/build/x86_64"
+
+      - name: Build universal macOS app bundle
+        run: ./build_release_macos.sh -u -x -1 -a universal -t 11.3
+
+      - name: Create DMG
+        run: |
+          mkdir -p "$GITHUB_WORKSPACE/build/universal/OrcaSlicer_dmg"
+          cmake -E rm -rf "$GITHUB_WORKSPACE/build/universal/OrcaSlicer_dmg"
+          mkdir -p "$GITHUB_WORKSPACE/build/universal/OrcaSlicer_dmg"
+          cp -R "$GITHUB_WORKSPACE/build/universal/OrcaSlicer/OrcaSlicer.app" "$GITHUB_WORKSPACE/build/universal/OrcaSlicer_dmg/"
+          ln -sfn /Applications "$GITHUB_WORKSPACE/build/universal/OrcaSlicer_dmg/Applications"
+          ver="$(grep 'set(SoftFever_VERSION' version.inc | cut -d '"' -f2)"
+          hdiutil create -volname "OrcaSlicer" -srcfolder "$GITHUB_WORKSPACE/build/universal/OrcaSlicer_dmg" -ov -format UDZO "OrcaSlicer_Mac_universal_V${ver}.dmg"
+
+      - name: Upload macOS DMG
+        uses: actions/upload-artifact@v7
+        with:
+          name: OrcaSlicer_Mac_universal_${{ github.sha }}
+          path: OrcaSlicer_Mac_universal_V*.dmg
+          if-no-files-found: error
+
+  build_windows:
+    name: Windows
+    needs: linux_bridge_runtime
+    runs-on: windows-2025
+    timeout-minutes: 360
+    env:
+      ORCA_UPDATER_SIG_KEY: ${{ secrets.ORCA_UPDATER_SIG_KEY }}
+      ver: ${{ github.ref_type == 'tag' && github.ref_name || github.sha }}
+
+    steps:
+      - *checkout
+
+      - *setup_cmake
+
+      - name: Download Linux host runtime
+        uses: actions/download-artifact@v8
+        with:
+          name: linux_host_runtime_${{ github.sha }}
+          path: ${{ github.workspace }}/linux_host_runtime_artifact
+
+      - name: Extract Linux host runtime
+        working-directory: ${{ github.workspace }}
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path "$env:GITHUB_WORKSPACE\tools\pjarczak_bambu_linux_host\runtime" | Out-Null
+          tar -xzf "$env:GITHUB_WORKSPACE\linux_host_runtime_artifact\linux_host_runtime.tar.gz" -C "$env:GITHUB_WORKSPACE\tools\pjarczak_bambu_linux_host\runtime"
+
+      - name: Download WSL rootfs
+        uses: actions/download-artifact@v8
+        with:
+          name: wsl_rootfs_${{ github.sha }}
+          path: ${{ github.workspace }}/wsl_rootfs_artifact
+
+      - name: Extract WSL rootfs
+        working-directory: ${{ github.workspace }}
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path "$env:GITHUB_WORKSPACE\tools\pjarczak_bambu_runtime\rootfs" | Out-Null
+          tar -xzf "$env:GITHUB_WORKSPACE\wsl_rootfs_artifact\wsl_rootfs.tar.gz" -C "$env:GITHUB_WORKSPACE\tools\pjarczak_bambu_runtime\rootfs"
+
+      - name: Set up MSBuild
+        uses: microsoft/setup-msbuild@v3
+
+      - name: Install NSIS
+        shell: pwsh
+        run: choco install nsis -y
+
+      - name: Cache Windows deps
+        id: cache_windows_deps
+        uses: actions/cache@v5
+        with:
+          path: ${{ github.workspace }}/deps/build/OrcaSlicer_dep
+          key: windows-deps-${{ hashFiles('deps/**', '!deps/build/**') }}-v1
+
+      - name: Build Windows deps
+        if: ${{ steps.cache_windows_deps.outputs.cache-hit != 'true' }}
+        working-directory: ${{ github.workspace }}
+        env:
+          WindowsSdkDir: 'C:\Program Files (x86)\Windows Kits\10\'
+          WindowsSDKVersion: '10.0.26100.0\'
+        shell: pwsh
+        run: .\build_release_vs.bat deps
+
+      - name: Build Windows app
+        working-directory: ${{ github.workspace }}
+        env:
+          WindowsSdkDir: 'C:\Program Files (x86)\Windows Kits\10\'
+          WindowsSDKVersion: '10.0.26100.0\'
+        shell: pwsh
+        run: .\build_release_vs.bat slicer
+
+      - name: Validate bundled WSL2 runtime
+        shell: pwsh
+        run: |
+          $wsl = Join-Path $env:WINDIR 'System32\wsl.exe'
+          if (!(Test-Path $wsl)) { throw 'wsl.exe not found' }
+          & "$env:GITHUB_WORKSPACE\build\OrcaSlicer\install_runtime.ps1" -ReplaceExisting
+          & "$env:APPDATA\OrcaSlicer\plugins\verify_runtime.ps1" -PackageDir "$env:APPDATA\OrcaSlicer\plugins" -PluginCacheDir "$env:APPDATA\OrcaSlicer\ota\plugins" -AllowMissingLinuxPlugin
+
+      - name: Create Windows installer
+        working-directory: ${{ github.workspace }}/build
+        shell: pwsh
+        run: cpack -G NSIS
+
+      - name: Pack Windows app
+        working-directory: ${{ github.workspace }}/build
+        shell: cmd
+        run: '"C:/Program Files/7-Zip/7z.exe" a -tzip OrcaSlicer_Windows_${{ env.ver }}_portable.zip ${{ github.workspace }}/build/OrcaSlicer'
+
+      - name: Upload Windows portable
+        uses: actions/upload-artifact@v7
+        with:
+          name: OrcaSlicer_Windows_${{ env.ver }}_portable
+          path: ${{ github.workspace }}/build/OrcaSlicer_Windows_${{ env.ver }}_portable.zip
+          if-no-files-found: error
+
+      - name: Upload Windows installer
+        uses: actions/upload-artifact@v7
+        with:
+          name: OrcaSlicer_Windows_${{ env.ver }}_installer
+          path: ${{ github.workspace }}/build/OrcaSlicer*.exe
+          if-no-files-found: error
+
+  publish_release:
+    name: Publish release assets
+    needs:
+      - linux
+      - rpm_fedora41
+      - build_macos_universal
+      - build_windows
+    if: ${{ github.event_name == 'release' || (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')) }}
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v8
+        with:
+          path: release-artifacts
+
+      - name: Create or update GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.event.release.tag_name || github.ref_name }}
+          generate_release_notes: true
+          overwrite_files: true
+          files: release-artifacts/**/*
+
+  publish_winget:
+    name: Publish to WinGet
+    needs: publish_release
+    if: ${{ github.event_name == 'release' && !github.event.release.prerelease }}
+    runs-on: windows-2025
+    steps:
+      - name: Publish WinGet manifest
+        uses: vedantmgoyal9/winget-releaser@v2
+        with:
+          identifier: SoftFever.OrcaSlicer
+          version: ${{ github.event.release.tag_name }}
+          token: ${{ secrets.WINGET_TOKEN }}
+          installers-regex: '\.exe$'

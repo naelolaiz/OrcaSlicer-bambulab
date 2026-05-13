@@ -4,6 +4,7 @@ REQUIRED_DEV_PACKAGES=(
     autoconf
     automake
     cmake
+    curl
     dbus-devel
     eglexternalplatform-devel
     extra-cmake-modules
@@ -19,16 +20,20 @@ REQUIRED_DEV_PACKAGES=(
     libquadmath-devel
     libsecret-devel
     libspnav-devel
+    libstdc++-static
     libtool
     m4
     mesa-libGLU-devel
+    nasm
     ninja-build
     openssl-devel
     perl-FindBin
+    rpm-build
     texinfo
     wayland-protocols-devel
     webkit2gtk4.1-devel
     wget
+    yasm
     libcurl-devel
 )
 

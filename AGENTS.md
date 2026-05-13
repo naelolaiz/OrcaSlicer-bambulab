@@ -7,8 +7,8 @@ OrcaSlicer’s C++17 sources live in `src/`, split by feature modules and platfo
 Use out-of-source builds:
 - `cmake -S . -B build -DCMAKE_BUILD_TYPE=Release` configures dependencies and generates build files.
 - `cmake --build build --target OrcaSlicer --config Release` compiles the app; add `--parallel` to speed up.
-- `cmake --build build --target tests` then `ctest --test-dir build --output-on-failure` runs automated suites.
-Platform helpers such as `build_linux.sh`, `build_release_macos.sh`, and `build_release_vs2022.bat` wrap the same flow with toolchain flags. Use `build_release_macos.sh -sx` when reproducing macOS build issues, and `scripts/DockerBuild.sh` for reproducible container builds.
+- `cmake --workflow --preset linux-bmcu-tests` builds the Catch2 unit-test executables, then `ctest --preset linux-bmcu-tests` runs them. Append `-DBUILD_TESTS=ON` to a manual configure if you prefer running outside the preset.
+Linux distro dependencies are installed with `./build_linux.sh -u`; use `./build_linux.sh -g -istrlL` for a GitHub Actions-like Linux container build. Release packaging should be reproduced with the CMake workflow/package presets in `CMakePresets.json`. macOS and Windows release helpers still set platform toolchain defaults around the same CMake/CPack flow.
 
 ## Coding Style & Naming Conventions
 `.clang-format` enforces 4-space indents, a 140-column limit, aligned initializers, and brace wrapping for classes and functions. Run `clang-format -i <file>` before committing; the CMake `clang-format` target is available when LLVM tools are on your PATH. Prefer `CamelCase` for classes, `snake_case` for functions and locals, and `SCREAMING_CASE` for constants, matching conventions in `src/`. Keep headers self-contained and align include order with the IWYU pragmas.

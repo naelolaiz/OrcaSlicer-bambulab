@@ -1,0 +1,71 @@
+name: Translations
+
+on:
+  pull_request:
+    branches:
+      - main
+    paths:
+      - 'localization/**'
+      - 'scripts/HintsToPot.py'
+      - 'CMakeLists.txt'
+      - 'CMakePresets.json'
+      - '.github/workflows/translations.yml'
+  push:
+    branches:
+      - main
+    paths:
+      - 'localization/**'
+      - 'scripts/HintsToPot.py'
+      - 'CMakeLists.txt'
+      - 'CMakePresets.json'
+      - '.github/workflows/translations.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    name: Check catalogs
+    if: github.event_name != 'workflow_dispatch'
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      - name: Install gettext
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gettext
+
+      - name: Check translation format
+        run: cmake --workflow --preset translations-check
+
+  update:
+    name: Update catalogs
+    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      - name: Install gettext
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gettext
+
+      - name: Update translation catalog
+        run: |
+          cmake --workflow --preset translations-update
+          git add localization/i18n/*
+
+      - name: Commit translation catalog updates
+        uses: qoomon/actions--create-commit@v1
+        with:
+          message: Update translation catalog
+          skip-empty: true
+
+      - name: Push changes
+        run: git push

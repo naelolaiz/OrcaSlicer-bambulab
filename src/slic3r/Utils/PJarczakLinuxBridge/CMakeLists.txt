@@ -89,6 +89,131 @@ if (UNIX AND NOT APPLE AND EXISTS "${PJARCZAK_LINUX_HOST_DIR}/main.cpp" AND EXIS
         DEPENDS pjarczak_bambu_linux_host_abi1 pjarczak_bambu_linux_host_abi0
     )
 
+    set(PJARCZAK_LINUX_RUNTIME_COMPONENT pjarczak_linux_host_runtime)
+    set(PJARCZAK_LINUX_RUNTIME_DEST linux-x86_64)
+    set(PJARCZAK_LINUX_RUNTIME_DEPENDENCY_SET pjarczak_linux_host_runtime_dependencies)
+
+    install(PROGRAMS "${CMAKE_SOURCE_DIR}/tools/pjarczak_bambu_runtime/wsl/pjarczak_bambu_linux_host"
+        DESTINATION "${PJARCZAK_LINUX_RUNTIME_DEST}"
+        COMPONENT "${PJARCZAK_LINUX_RUNTIME_COMPONENT}"
+        EXCLUDE_FROM_ALL
+    )
+
+    install(TARGETS pjarczak_bambu_linux_host_abi1 pjarczak_bambu_linux_host_abi0
+        RUNTIME_DEPENDENCY_SET "${PJARCZAK_LINUX_RUNTIME_DEPENDENCY_SET}"
+        RUNTIME DESTINATION "${PJARCZAK_LINUX_RUNTIME_DEST}"
+        COMPONENT "${PJARCZAK_LINUX_RUNTIME_COMPONENT}"
+        EXCLUDE_FROM_ALL
+    )
+
+    foreach(PJARCZAK_LINUX_RUNTIME_CERT
+        "${CMAKE_SOURCE_DIR}/cert/ca-certificates.crt"
+        "${CMAKE_SOURCE_DIR}/cert/slicer_base64.cer"
+        "${CMAKE_SOURCE_DIR}/resources/cert/ca-certificates.crt"
+        "${CMAKE_SOURCE_DIR}/resources/cert/slicer_base64.cer"
+    )
+        if (EXISTS "${PJARCZAK_LINUX_RUNTIME_CERT}")
+            install(FILES "${PJARCZAK_LINUX_RUNTIME_CERT}"
+                DESTINATION "${PJARCZAK_LINUX_RUNTIME_DEST}"
+                COMPONENT "${PJARCZAK_LINUX_RUNTIME_COMPONENT}"
+                EXCLUDE_FROM_ALL
+            )
+        endif()
+    endforeach()
+
+    set(PJARCZAK_LINUX_PAYLOAD_IMPORTED_TARGETS "")
+    set(PJARCZAK_LINUX_PAYLOAD_NAMES libbambu_networking.so libBambuSource.so)
+    foreach(PJARCZAK_LINUX_PAYLOAD_NAME IN LISTS PJARCZAK_LINUX_PAYLOAD_NAMES)
+        foreach(PJARCZAK_LINUX_PAYLOAD_CANDIDATE
+            "${CMAKE_SOURCE_DIR}/src/slic3r/Utils/PJarczakLinuxBridge/runtime/proprietary/${PJARCZAK_LINUX_PAYLOAD_NAME}"
+            "${CMAKE_SOURCE_DIR}/tools/pjarczak_bambu_linux_host/runtime/linux-x86_64/${PJARCZAK_LINUX_PAYLOAD_NAME}"
+            "${CMAKE_SOURCE_DIR}/build/${PJARCZAK_LINUX_PAYLOAD_NAME}"
+            "${CMAKE_SOURCE_DIR}/${PJARCZAK_LINUX_PAYLOAD_NAME}"
+        )
+            if (EXISTS "${PJARCZAK_LINUX_PAYLOAD_CANDIDATE}")
+                string(MAKE_C_IDENTIFIER "${PJARCZAK_LINUX_PAYLOAD_NAME}" PJARCZAK_LINUX_PAYLOAD_TARGET)
+                set(PJARCZAK_LINUX_PAYLOAD_TARGET "pjarczak_payload_${PJARCZAK_LINUX_PAYLOAD_TARGET}")
+                add_library("${PJARCZAK_LINUX_PAYLOAD_TARGET}" SHARED IMPORTED)
+                set_target_properties("${PJARCZAK_LINUX_PAYLOAD_TARGET}" PROPERTIES IMPORTED_LOCATION "${PJARCZAK_LINUX_PAYLOAD_CANDIDATE}")
+                list(APPEND PJARCZAK_LINUX_PAYLOAD_IMPORTED_TARGETS "${PJARCZAK_LINUX_PAYLOAD_TARGET}")
+                break()
+            endif()
+        endforeach()
+    endforeach()
+
+    if (PJARCZAK_LINUX_PAYLOAD_IMPORTED_TARGETS)
+        install(IMPORTED_RUNTIME_ARTIFACTS ${PJARCZAK_LINUX_PAYLOAD_IMPORTED_TARGETS}
+            RUNTIME_DEPENDENCY_SET "${PJARCZAK_LINUX_RUNTIME_DEPENDENCY_SET}"
+            LIBRARY DESTINATION "${PJARCZAK_LINUX_RUNTIME_DEST}"
+            COMPONENT "${PJARCZAK_LINUX_RUNTIME_COMPONENT}"
+            EXCLUDE_FROM_ALL
+        )
+    endif()
+
+    install(RUNTIME_DEPENDENCY_SET "${PJARCZAK_LINUX_RUNTIME_DEPENDENCY_SET}"
+        DESTINATION "${PJARCZAK_LINUX_RUNTIME_DEST}"
+        COMPONENT "${PJARCZAK_LINUX_RUNTIME_COMPONENT}"
+        EXCLUDE_FROM_ALL
+        POST_EXCLUDE_REGEXES
+            ".*/ld-linux[^/]*$"
+            ".*/ld-musl-[^/]*$"
+            ".*/linux-vdso\\.so\\..*$"
+            ".*/libc\\.so\\..*$"
+            ".*/libm\\.so\\..*$"
+            ".*/libpthread\\.so\\..*$"
+            ".*/librt\\.so\\..*$"
+            ".*/libdl\\.so\\..*$"
+            ".*/libresolv\\.so\\..*$"
+            ".*/libnss_[^/]*\\.so.*$"
+            ".*/libnsl\\.so\\..*$"
+            ".*/libutil\\.so\\..*$"
+            ".*/libanl\\.so\\..*$"
+    )
+
+    install(CODE "
+        set(runtime_dir \"\$ENV{DESTDIR}\${CMAKE_INSTALL_PREFIX}/${PJARCZAK_LINUX_RUNTIME_DEST}\")
+        if (EXISTS \"\${runtime_dir}/libbambu_networking.so\" AND EXISTS \"\${runtime_dir}/libBambuSource.so\")
+            file(READ \"${CMAKE_SOURCE_DIR}/src/slic3r/Utils/bambu_networking.hpp\" bambu_networking_header)
+            string(REGEX MATCH \"BAMBU_NETWORK_AGENT_VERSION[ \\t\\r\\n]+\\\"([^\\\"]+)\\\"\" _ \"\${bambu_networking_header}\")
+            set(abi_version \"\${CMAKE_MATCH_1}\")
+            if (abi_version STREQUAL \"\")
+                message(FATAL_ERROR \"Could not extract BAMBU_NETWORK_AGENT_VERSION\")
+            endif()
+            file(SHA256 \"\${runtime_dir}/libbambu_networking.so\" network_sha)
+            file(SHA256 \"\${runtime_dir}/libBambuSource.so\" source_sha)
+            file(WRITE \"\${runtime_dir}/linux_payload_manifest.json\"
+\"{
+  \\\"files\\\": [
+    {
+      \\\"name\\\": \\\"libbambu_networking.so\\\",
+      \\\"sha256\\\": \\\"\${network_sha}\\\",
+      \\\"abi_version\\\": \\\"\${abi_version}\\\"
+    },
+    {
+      \\\"name\\\": \\\"libBambuSource.so\\\",
+      \\\"sha256\\\": \\\"\${source_sha}\\\"
+    }
+  ]
+}
+\")
+        endif()
+    " COMPONENT "${PJARCZAK_LINUX_RUNTIME_COMPONENT}" EXCLUDE_FROM_ALL)
+
+    set(PJARCZAK_WSL_ROOTFS "${CMAKE_SOURCE_DIR}/tools/pjarczak_bambu_runtime/rootfs/windows-wsl2-rootfs.tar")
+
+    add_custom_target(pjarczak_bambu_wsl_rootfs
+        COMMAND bash tools/pjarczak_bambu_runtime/rootfs/build_windows_wsl_rootfs.sh tools/pjarczak_bambu_runtime/rootfs/windows-wsl2-rootfs.tar
+        WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+        COMMENT "Build WSL rootfs"
+        VERBATIM
+    )
+
+    install(FILES "${PJARCZAK_WSL_ROOTFS}"
+        DESTINATION "."
+        COMPONENT pjarczak_wsl_rootfs
+        EXCLUDE_FROM_ALL
+    )
+
     install(TARGETS pjarczak_bambu_linux_host_abi1 pjarczak_bambu_linux_host_abi0
         RUNTIME DESTINATION "."
     )

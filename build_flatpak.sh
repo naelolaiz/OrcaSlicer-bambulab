@@ -2,7 +2,7 @@
 
 # OrcaSlicer Flatpak Build Script
 # This script builds and packages OrcaSlicer as a Flatpak package locally
-# Based on the GitHub Actions workflow in .github/workflows/build_all.yml
+# Based on the repository build environment used by GitHub Actions.
 
 set -e
 SECONDS=0
