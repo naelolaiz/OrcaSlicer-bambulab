@@ -1,0 +1,348 @@
+{
+  "version": 6,
+  "cmakeMinimumRequired": {
+    "major": 3,
+    "minor": 25,
+    "patch": 0
+  },
+  "configurePresets": [
+    {
+      "name": "translations",
+      "displayName": "Translations",
+      "binaryDir": "${sourceDir}/build/translations",
+      "cacheVariables": {
+        "ORCA_TRANSLATIONS_ONLY": true
+      }
+    },
+    {
+      "name": "linux-pr",
+      "displayName": "Linux PR validation",
+      "generator": "Ninja Multi-Config",
+      "binaryDir": "${sourceDir}/build/pr",
+      "cacheVariables": {
+        "CMAKE_PREFIX_PATH": "${sourceDir}/deps/build/OrcaSlicer_dep/usr/local",
+        "SLIC3R_STATIC": true,
+        "SLIC3R_GTK": "3",
+        "BBL_RELEASE_TO_PUBLIC": false,
+        "BBL_INTERNAL_TESTING": false,
+        "SLIC3R_PCH": true,
+        "ORCA_TOOLS": true,
+        "BUILD_TESTS": true
+      }
+    },
+    {
+      "name": "linux-bmcu-base",
+      "hidden": true,
+      "generator": "Ninja Multi-Config",
+      "binaryDir": "${sourceDir}/build",
+      "installDir": "/opt/orcaslicer",
+      "cacheVariables": {
+        "CMAKE_PREFIX_PATH": "${sourceDir}/deps/build/OrcaSlicer_dep/usr/local",
+        "SLIC3R_STATIC": true,
+        "SLIC3R_GTK": "3",
+        "BBL_RELEASE_TO_PUBLIC": true,
+        "BBL_INTERNAL_TESTING": false,
+        "SLIC3R_PCH": true,
+        "ORCA_TOOLS": true,
+        "ORCA_BMCU_LINUX_PACKAGE": true,
+        "ORCA_CPACK_DIST_ID": "$env{ORCA_DIST_ID}"
+      }
+    },
+    {
+      "name": "linux-bmcu-amd64",
+      "inherits": "linux-bmcu-base",
+      "displayName": "Linux BMCU amd64",
+      "cacheVariables": {
+        "ORCA_CPACK_ARCH": "amd64"
+      }
+    },
+    {
+      "name": "linux-bmcu-x86_64",
+      "inherits": "linux-bmcu-base",
+      "displayName": "Linux BMCU x86_64",
+      "cacheVariables": {
+        "ORCA_CPACK_ARCH": "x86_64"
+      }
+    },
+    {
+      "name": "linux-bridge-runtime",
+      "displayName": "Linux bridge runtime",
+      "generator": "Ninja Multi-Config",
+      "binaryDir": "${sourceDir}/build",
+      "cacheVariables": {
+        "ORCA_TOOLS": true
+      }
+    }
+  ],
+  "buildPresets": [
+    {
+      "name": "translations-check",
+      "configurePreset": "translations",
+      "targets": [
+        "orcaslicer_check_translations"
+      ]
+    },
+    {
+      "name": "translations-update",
+      "configurePreset": "translations",
+      "targets": [
+        "orcaslicer_update_translations"
+      ]
+    },
+    {
+      "name": "linux-pr-tests",
+      "configurePreset": "linux-pr",
+      "configuration": "Release",
+      "targets": [
+        "libnest2d_tests",
+        "libslic3r_tests",
+        "slic3rutils_tests",
+        "fff_print_tests",
+        "sla_print_tests"
+      ],
+      "jobs": 0
+    },
+    {
+      "name": "linux-bmcu",
+      "configurePreset": "linux-bmcu-amd64",
+      "configuration": "Release",
+      "jobs": 0
+    },
+    {
+      "name": "linux-bmcu-appimage",
+      "configurePreset": "linux-bmcu-amd64",
+      "configuration": "Release",
+      "targets": [
+        "OrcaSlicer_AppImage"
+      ],
+      "jobs": 0
+    },
+    {
+      "name": "linux-bmcu-rpm",
+      "configurePreset": "linux-bmcu-x86_64",
+      "configuration": "Release",
+      "jobs": 0
+    },
+    {
+      "name": "linux-bridge-runtime",
+      "configurePreset": "linux-bridge-runtime",
+      "configuration": "Release",
+      "targets": [
+        "pjarczak_bambu_linux_host",
+        "pjarczak_bambu_wsl_rootfs"
+      ],
+      "jobs": 0
+    }
+  ],
+  "testPresets": [
+    {
+      "name": "linux-pr",
+      "configurePreset": "linux-pr",
+      "configuration": "Release",
+      "output": {
+        "outputOnFailure": true
+      },
+      "execution": {
+        "noTestsAction": "error"
+      }
+    }
+  ],
+  "packagePresets": [
+    {
+      "name": "linux-bmcu-tgz",
+      "configurePreset": "linux-bmcu-amd64",
+      "generators": [
+        "TGZ"
+      ],
+      "configurations": [
+        "Release"
+      ],
+      "packageDirectory": "${sourceDir}/out",
+      "variables": {
+        "CPACK_INCLUDE_TOPLEVEL_DIRECTORY": "OFF"
+      }
+    },
+    {
+      "name": "linux-bmcu-deb",
+      "configurePreset": "linux-bmcu-amd64",
+      "generators": [
+        "DEB"
+      ],
+      "configurations": [
+        "Release"
+      ],
+      "packageDirectory": "${sourceDir}/out"
+    },
+    {
+      "name": "linux-bmcu-rpm",
+      "configurePreset": "linux-bmcu-x86_64",
+      "generators": [
+        "RPM"
+      ],
+      "configurations": [
+        "Release"
+      ],
+      "packageDirectory": "${sourceDir}/out"
+    },
+    {
+      "name": "linux-bridge-runtime",
+      "configurePreset": "linux-bridge-runtime",
+      "generators": [
+        "TGZ"
+      ],
+      "configurations": [
+        "Release"
+      ],
+      "packageDirectory": "${sourceDir}",
+      "variables": {
+        "CPACK_ARCHIVE_COMPONENT_INSTALL": "ON",
+        "CPACK_ARCHIVE_FILE_NAME": "linux_host_runtime",
+        "CPACK_COMPONENTS_ALL": "pjarczak_linux_host_runtime",
+        "CPACK_COMPONENTS_GROUPING": "ALL_COMPONENTS_IN_ONE",
+        "CPACK_INCLUDE_TOPLEVEL_DIRECTORY": "OFF"
+      }
+    },
+    {
+      "name": "wsl-rootfs",
+      "configurePreset": "linux-bridge-runtime",
+      "generators": [
+        "TGZ"
+      ],
+      "configurations": [
+        "Release"
+      ],
+      "packageDirectory": "${sourceDir}",
+      "variables": {
+        "CPACK_ARCHIVE_COMPONENT_INSTALL": "ON",
+        "CPACK_ARCHIVE_FILE_NAME": "wsl_rootfs",
+        "CPACK_COMPONENTS_ALL": "pjarczak_wsl_rootfs",
+        "CPACK_COMPONENTS_GROUPING": "ALL_COMPONENTS_IN_ONE",
+        "CPACK_INCLUDE_TOPLEVEL_DIRECTORY": "OFF"
+      }
+    }
+  ],
+  "workflowPresets": [
+    {
+      "name": "translations-check",
+      "displayName": "Check translation catalogs",
+      "steps": [
+        {
+          "type": "configure",
+          "name": "translations"
+        },
+        {
+          "type": "build",
+          "name": "translations-check"
+        }
+      ]
+    },
+    {
+      "name": "translations-update",
+      "displayName": "Update translation catalogs",
+      "steps": [
+        {
+          "type": "configure",
+          "name": "translations"
+        },
+        {
+          "type": "build",
+          "name": "translations-update"
+        },
+        {
+          "type": "build",
+          "name": "translations-check"
+        }
+      ]
+    },
+    {
+      "name": "linux-pr-tests",
+      "displayName": "Build Linux PR test binaries",
+      "steps": [
+        {
+          "type": "configure",
+          "name": "linux-pr"
+        },
+        {
+          "type": "build",
+          "name": "linux-pr-tests"
+        }
+      ]
+    },
+    {
+      "name": "linux-bmcu-appimage",
+      "displayName": "Build Linux BMCU AppImage",
+      "steps": [
+        {
+          "type": "configure",
+          "name": "linux-bmcu-amd64"
+        },
+        {
+          "type": "build",
+          "name": "linux-bmcu-appimage"
+        }
+      ]
+    },
+    {
+      "name": "linux-bmcu-portable",
+      "displayName": "Build Linux BMCU portable archive and DEB",
+      "steps": [
+        {
+          "type": "configure",
+          "name": "linux-bmcu-amd64"
+        },
+        {
+          "type": "build",
+          "name": "linux-bmcu"
+        },
+        {
+          "type": "package",
+          "name": "linux-bmcu-tgz"
+        },
+        {
+          "type": "package",
+          "name": "linux-bmcu-deb"
+        }
+      ]
+    },
+    {
+      "name": "linux-bmcu-rpm",
+      "displayName": "Build Linux BMCU RPM",
+      "steps": [
+        {
+          "type": "configure",
+          "name": "linux-bmcu-x86_64"
+        },
+        {
+          "type": "build",
+          "name": "linux-bmcu-rpm"
+        },
+        {
+          "type": "package",
+          "name": "linux-bmcu-rpm"
+        }
+      ]
+    },
+    {
+      "name": "linux-bridge-runtime",
+      "displayName": "Build Linux bridge runtime",
+      "steps": [
+        {
+          "type": "configure",
+          "name": "linux-bridge-runtime"
+        },
+        {
+          "type": "build",
+          "name": "linux-bridge-runtime"
+        },
+        {
+          "type": "package",
+          "name": "linux-bridge-runtime"
+        },
+        {
+          "type": "package",
+          "name": "wsl-rootfs"
+        }
+      ]
+    }
+  ]
+}

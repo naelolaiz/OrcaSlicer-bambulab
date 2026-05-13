@@ -49,3 +49,4 @@ internal_docs/
 *.flatpak
 /flatpak-repo/
 /.idea/
+tools/pjarczak_bambu_linux_host/.build-linux-host/

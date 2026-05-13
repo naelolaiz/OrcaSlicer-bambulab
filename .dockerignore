@@ -24,7 +24,3 @@ install_*
 build_*/
 !build_linux.sh
 SVG
-scripts/Dockerfile
-scripts/DockerBuild.sh
-scripts/DockerRun.sh
-scripts/.dockerignore

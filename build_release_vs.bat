@@ -150,10 +150,8 @@ if "%USE_NINJA%"=="1" (
     if errorlevel 1 exit /b 1
 )
 @echo off
-cd ..
-call scripts/run_gettext.bat
+cmake --build . --target orcaslicer_check_translations --config %build_type%
 if errorlevel 1 exit /b 1
-cd %build_dir%
 cmake --build . --target install --config %build_type%
 if errorlevel 1 exit /b 1
 call :copy_linux_bridge_runtime
@@ -211,7 +209,7 @@ if errorlevel 1 exit /b 1
 if not exist "%HOST_RUNTIME_DIR%\pjarczak_bambu_linux_host" (
     echo Missing linux host runtime: %HOST_RUNTIME_DIR%\pjarczak_bambu_linux_host
     echo Build it first on Linux with:
-    echo   tools\pjarczak_bambu_linux_host\package_linux_host_runtime.sh
+    echo   cmake --workflow --preset linux-bridge-runtime
     exit /b 1
 )
 
@@ -252,7 +250,7 @@ if not defined PJARCZAK_ROOTFS_TAR (
 if not exist "%HOST_RUNTIME_DIR%\pjarczak_bambu_linux_host" (
     echo Missing linux host runtime: %HOST_RUNTIME_DIR%\pjarczak_bambu_linux_host
     echo Build it first on Linux with:
-    echo   tools\pjarczak_bambu_linux_host\package_linux_host_runtime.sh
+    echo   cmake --workflow --preset linux-bridge-runtime
     exit /b 1
 )
 

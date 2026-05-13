@@ -57,12 +57,13 @@ async function triggerDedupeWorkflow(
   }
 
   await githubRequest(
-    `/repos/${owner}/${repo}/actions/workflows/claude-dedupe-issues.yml/dispatches`,
+    `/repos/${owner}/${repo}/actions/workflows/issue-automation.yml/dispatches`,
     token,
     'POST',
     {
       ref: 'main',
       inputs: {
+        task: "dedupe",
         issue_number: issueNumber.toString()
       }
     }
@@ -82,12 +83,13 @@ Usage:
 Environment Variables:
   GITHUB_TOKEN - GitHub personal access token with repo and actions permissions (required)
   DRY_RUN - Set to "false" to actually trigger workflows (default: true for safety)
-  MAX_ISSUE_NUMBER - Only process issues with numbers less than this value (default: 4050)`);
+  MAX_ISSUE_NUMBER - Only process issues with numbers less than this value (default: 11000)`);
   }
   console.log("[DEBUG] GitHub token found");
 
-  const owner = "OrcaSlicer";
-  const repo = "OrcaSlicer";
+  const [defaultOwner, defaultRepo] = (process.env.GITHUB_REPOSITORY || "OrcaSlicer/OrcaSlicer").split("/");
+  const owner = process.env.GITHUB_REPOSITORY_OWNER || defaultOwner;
+  const repo = process.env.GITHUB_REPOSITORY_NAME || defaultRepo;
   const dryRun = process.env.DRY_RUN !== "false";
   const maxIssueNumber = parseInt(process.env.MAX_ISSUE_NUMBER || "11000", 10);
   const minIssueNumber = parseInt(process.env.MIN_ISSUE_NUMBER || "1", 10);
@@ -109,14 +111,13 @@ Environment Variables:
     
     if (pageIssues.length === 0) break;
     
-    // Filter to only include issues within the specified range
+    // Filter to issues within the configured number range.
     const filteredIssues = pageIssues.filter(issue => 
       issue.number >= minIssueNumber && issue.number < maxIssueNumber
     );
     allIssues.push(...filteredIssues);
     
-    // If the oldest issue in this page is still above our minimum, we need to continue
-    // but if the oldest issue is below our minimum, we can stop
+    // Stop once pagination moves below the configured range.
     const oldestIssueInPage = pageIssues[pageIssues.length - 1];
     if (oldestIssueInPage && oldestIssueInPage.number >= maxIssueNumber) {
       console.log(`[DEBUG] Oldest issue in page #${page} is #${oldestIssueInPage.number}, continuing...`);

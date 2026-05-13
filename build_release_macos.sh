@@ -136,7 +136,7 @@ copy_linux_bridge_runtime_to_app() {
     if [ ! -f "$HOST_RUNTIME_DIR/pjarczak_bambu_linux_host" ]; then
         echo "Missing linux host runtime: $HOST_RUNTIME_DIR/pjarczak_bambu_linux_host"
         echo "Build it first on Linux with:"
-        echo "  tools/pjarczak_bambu_linux_host/package_linux_host_runtime.sh"
+        echo "  cmake --workflow --preset linux-bridge-runtime"
         exit 1
     fi
 
@@ -251,8 +251,8 @@ build_slicer() {
 
             echo "Verify localization with gettext..."
             (
-                cd "$PROJECT_DIR"
-                ./scripts/run_gettext.sh
+                cd "$PROJECT_BUILD_DIR"
+                cmake --build . --config "$BUILD_CONFIG" --target orcaslicer_check_translations
             )
 
             echo "Fix macOS app package..."

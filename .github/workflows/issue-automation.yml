@@ -1,0 +1,194 @@
+name: Issue Automation
+
+on:
+  issues:
+    types:
+      - opened
+  issue_comment:
+    types:
+      - created
+  schedule:
+    - cron: '0 0 * * *'
+    - cron: '0 9 * * *'
+  workflow_dispatch:
+    inputs:
+      task:
+        description: 'Issue automation task to run'
+        required: true
+        default: dedupe
+        type: choice
+        options:
+          - dedupe
+          - auto-close
+          - backfill
+          - assign
+      issue_number:
+        description: 'Issue number for dedupe'
+        required: false
+        type: string
+      min_issue_number:
+        description: 'Lowest issue number to process for backfill'
+        required: false
+        default: '1'
+        type: string
+      max_issue_number:
+        description: 'Stop before this issue number for backfill'
+        required: false
+        default: '11000'
+        type: string
+      dry_run:
+        description: 'Backfill dry run mode'
+        required: false
+        default: 'true'
+        type: choice
+        options:
+          - 'true'
+          - 'false'
+
+jobs:
+  assign:
+    name: Assign or unassign issues
+    if: github.event_name == 'issue_comment' || github.event.schedule == '0 0 * * *' || (github.event_name == 'workflow_dispatch' && inputs.task == 'assign')
+    runs-on: ubuntu-24.04
+    permissions:
+      issues: write
+    steps:
+      - name: Assign the user or unassign stale assignments
+        # Note: v3.0.0 is broken (dist/index.mjs vs action.yml expects index.js)
+        # See: https://github.com/takanome-dev/assign-issue-action/issues/426
+        uses: takanome-dev/assign-issue-action@v2.2
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          maintainers: 'noisyfox,softfever'
+          days_until_unassign: 30
+          block_assignment: false
+          reminder_days: 7
+          max_assignments: 12
+
+  dedupe:
+    name: Detect duplicate issue
+    if: github.event_name == 'issues' || (github.event_name == 'workflow_dispatch' && inputs.task == 'dedupe')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - &checkout
+        name: Checkout repository
+        uses: actions/checkout@v6
+
+      - name: Resolve issue number
+        id: issue
+        env:
+          EVENT_ISSUE_NUMBER: ${{ github.event.issue.number }}
+          INPUT_ISSUE_NUMBER: ${{ inputs.issue_number }}
+        run: |
+          issue_number="${EVENT_ISSUE_NUMBER:-$INPUT_ISSUE_NUMBER}"
+          if [ -z "$issue_number" ]; then
+            echo "issue_number is required when running dedupe manually" >&2
+            exit 1
+          fi
+          echo "number=$issue_number" >> "$GITHUB_OUTPUT"
+
+      - name: Run Claude Code slash command
+        uses: anthropics/claude-code-base-action@v0.0.63
+        with:
+          prompt: "/dedupe ${{ github.repository }}/issues/${{ steps.issue.outputs.number }}"
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          claude_args: "--model claude-sonnet-4-5-20250929"
+          claude_env: |
+            GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Log duplicate comment event to Statsig
+        if: always()
+        env:
+          ISSUE_NUMBER: ${{ steps.issue.outputs.number }}
+          REPO: ${{ github.repository }}
+          STATSIG_API_KEY: ${{ secrets.STATSIG_API_KEY }}
+        run: |
+          if [ -z "$STATSIG_API_KEY" ]; then
+            echo "STATSIG_API_KEY not found, skipping Statsig logging"
+            exit 0
+          fi
+
+          event_payload=$(jq -n \
+            --arg issue_number "$ISSUE_NUMBER" \
+            --arg repo "$REPO" \
+            --arg triggered_by "${{ github.event_name }}" \
+            --arg workflow_run_id "${{ github.run_id }}" \
+            '{
+              events: [{
+                eventName: "github_duplicate_comment_added",
+                value: 1,
+                metadata: {
+                  repository: $repo,
+                  issue_number: ($issue_number | tonumber),
+                  triggered_by: $triggered_by,
+                  workflow_run_id: $workflow_run_id
+                },
+                time: (now | floor | tostring)
+              }]
+            }')
+
+          echo "Logging duplicate comment event to Statsig for issue #${ISSUE_NUMBER}"
+          response=$(curl -s -w "\n%{http_code}" -X POST https://events.statsigapi.net/v1/log_event \
+            -H "Content-Type: application/json" \
+            -H "STATSIG-API-KEY: ${STATSIG_API_KEY}" \
+            -d "$event_payload")
+
+          http_code=$(echo "$response" | tail -n1)
+          body=$(echo "$response" | head -n-1)
+
+          if [ "$http_code" -eq 200 ] || [ "$http_code" -eq 202 ]; then
+            echo "Successfully logged duplicate comment event for issue #${ISSUE_NUMBER}"
+          else
+            echo "Failed to log duplicate comment event for issue #${ISSUE_NUMBER}. HTTP ${http_code}: ${body}"
+          fi
+
+  auto-close:
+    name: Auto-close duplicate issues
+    if: github.event.schedule == '0 9 * * *' || (github.event_name == 'workflow_dispatch' && inputs.task == 'auto-close')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - *checkout
+
+      - &setup_bun
+        name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.13
+
+      - name: Auto-close duplicate issues
+        run: bun run scripts/auto-close-duplicates.ts
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_REPOSITORY_OWNER: ${{ github.repository_owner }}
+          GITHUB_REPOSITORY_NAME: ${{ github.event.repository.name }}
+          STATSIG_API_KEY: ${{ secrets.STATSIG_API_KEY }}
+
+  backfill:
+    name: Backfill duplicate comments
+    if: github.event_name == 'workflow_dispatch' && inputs.task == 'backfill'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      issues: read
+      actions: write
+    steps:
+      - *checkout
+
+      - *setup_bun
+
+      - name: Backfill duplicate comments
+        run: bun run scripts/backfill-duplicate-comments.ts
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          MIN_ISSUE_NUMBER: ${{ inputs.min_issue_number }}
+          MAX_ISSUE_NUMBER: ${{ inputs.max_issue_number }}
+          DRY_RUN: ${{ inputs.dry_run }}

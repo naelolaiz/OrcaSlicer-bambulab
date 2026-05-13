@@ -4,6 +4,7 @@ endif()
 
 cmake_minimum_required(VERSION 3.13)
 
+option(ORCA_TRANSLATIONS_ONLY "Configure only translation maintenance targets" OFF)
 
 # The following line used to be in tests/CMakeLists.txt
 # Having it there causes rebuilds of all targets on any CMakeLists.txt change under tests/
@@ -59,19 +60,128 @@ if (APPLE)
     message(STATUS "CMAKE_OSX_DEPLOYMENT_TARGET: ${CMAKE_OSX_DEPLOYMENT_TARGET}")
 endif ()
 
-project(OrcaSlicer)
+if (ORCA_TRANSLATIONS_ONLY)
+    project(OrcaSlicer LANGUAGES NONE)
+else ()
+    project(OrcaSlicer)
+endif ()
 
 # Backward compatibility for old CMake versions
 if (CMAKE_SYSTEM_NAME STREQUAL "Linux" AND CMAKE_VERSION VERSION_LESS "3.25")
     set(LINUX ON CACHE BOOL "" FORCE)
 endif ()
 
-include("version.inc")
-include(GNUInstallDirs)
-include(CMakeDependentOption)
+if (NOT ORCA_TRANSLATIONS_ONLY)
+    include("version.inc")
+    include(GNUInstallDirs)
+    include(CMakeDependentOption)
+endif ()
 
 set(SLIC3R_RESOURCES_DIR "${CMAKE_CURRENT_SOURCE_DIR}/resources")
 file(TO_NATIVE_PATH "${SLIC3R_RESOURCES_DIR}" SLIC3R_RESOURCES_DIR_WIN)
+
+# l10n maintenance targets. These are regular build targets so CI and local
+# builds use the same entry points without invoking CMake script mode.
+set(L10N_DIR "${SLIC3R_RESOURCES_DIR}/i18n")
+set(BBL_L18N_DIR "${CMAKE_CURRENT_SOURCE_DIR}/localization/i18n")
+
+if (WIN32)
+    set(GETTEXT_XGETTEXT_EXECUTABLE "${PROJECT_SOURCE_DIR}/tools/xgettext.exe")
+    set(GETTEXT_MSGMERGE_EXECUTABLE "${PROJECT_SOURCE_DIR}/tools/msgmerge.exe")
+    set(GETTEXT_MSGFMT_EXECUTABLE "${PROJECT_SOURCE_DIR}/tools/msgfmt.exe")
+else ()
+    find_program(GETTEXT_XGETTEXT_EXECUTABLE xgettext)
+    find_program(GETTEXT_MSGMERGE_EXECUTABLE msgmerge)
+    find_program(GETTEXT_MSGFMT_EXECUTABLE msgfmt)
+
+    if (NOT GETTEXT_XGETTEXT_EXECUTABLE)
+        set(GETTEXT_XGETTEXT_EXECUTABLE xgettext)
+    endif ()
+
+    if (NOT GETTEXT_MSGMERGE_EXECUTABLE)
+        set(GETTEXT_MSGMERGE_EXECUTABLE msgmerge)
+    endif ()
+
+    if (NOT GETTEXT_MSGFMT_EXECUTABLE)
+        set(GETTEXT_MSGFMT_EXECUTABLE msgfmt)
+    endif ()
+endif ()
+
+find_program(PYTHON_EXECUTABLE NAMES python3 python)
+if (NOT PYTHON_EXECUTABLE)
+    set(PYTHON_EXECUTABLE python3)
+endif ()
+
+add_custom_target(gettext_make_pot
+    COMMAND ${GETTEXT_XGETTEXT_EXECUTABLE} --keyword=L --keyword=_L --keyword=_u8L --keyword=L_CONTEXT:1,2c --keyword=_L_PLURAL:1,2 --add-comments=TRN --from-code=UTF-8 --no-location --debug --boost
+        -f "${BBL_L18N_DIR}/list.txt"
+        -o "${BBL_L18N_DIR}/OrcaSlicer.pot"
+    COMMAND "${PYTHON_EXECUTABLE}" "${PROJECT_SOURCE_DIR}/scripts/HintsToPot.py" "${SLIC3R_RESOURCES_DIR}" "${BBL_L18N_DIR}"
+    WORKING_DIRECTORY ${PROJECT_SOURCE_DIR}
+    COMMENT "Generate pot file from strings in the source tree"
+)
+
+file(GLOB BBL_L10N_PO_FILES "${BBL_L18N_DIR}/*/OrcaSlicer*.po")
+set(ORCA_L10N_MERGE_STAMPS "")
+set(ORCA_L10N_MO_FILES "")
+foreach(po_file ${BBL_L10N_PO_FILES})
+    get_filename_component(po_parent_dir "${po_file}" DIRECTORY)
+    get_filename_component(po_dir "${po_parent_dir}" NAME)
+    set(merge_stamp "${CMAKE_CURRENT_BINARY_DIR}/l10n/${po_dir}/OrcaSlicer.merge.stamp")
+    set(mo_dir "${L10N_DIR}/${po_dir}")
+    set(mo_file "${mo_dir}/OrcaSlicer.mo")
+
+    add_custom_command(
+        OUTPUT "${merge_stamp}"
+        COMMAND "${CMAKE_COMMAND}" -E make_directory "${CMAKE_CURRENT_BINARY_DIR}/l10n/${po_dir}"
+        COMMAND ${GETTEXT_MSGMERGE_EXECUTABLE} -N -o "${po_file}" "${po_file}" "${BBL_L18N_DIR}/OrcaSlicer.pot"
+        COMMAND "${CMAKE_COMMAND}" -E touch "${merge_stamp}"
+        DEPENDS "${po_file}" "${BBL_L18N_DIR}/OrcaSlicer.pot"
+        WORKING_DIRECTORY ${PROJECT_SOURCE_DIR}
+        VERBATIM
+    )
+    list(APPEND ORCA_L10N_MERGE_STAMPS "${merge_stamp}")
+
+    add_custom_command(
+        OUTPUT "${mo_file}"
+        COMMAND "${CMAKE_COMMAND}" -E make_directory "${mo_dir}"
+        COMMAND ${GETTEXT_MSGFMT_EXECUTABLE} --check-format -o "${mo_file}" "${po_file}"
+        DEPENDS "${po_file}"
+        WORKING_DIRECTORY ${PROJECT_SOURCE_DIR}
+        VERBATIM
+    )
+    list(APPEND ORCA_L10N_MO_FILES "${mo_file}")
+endforeach()
+
+add_custom_target(gettext_merge_po_with_pot
+    DEPENDS ${ORCA_L10N_MERGE_STAMPS}
+    WORKING_DIRECTORY ${PROJECT_SOURCE_DIR}
+    COMMENT "Merge localization po with new generated pot file"
+)
+add_dependencies(gettext_merge_po_with_pot gettext_make_pot)
+
+add_custom_target(gettext_po_to_mo
+    DEPENDS ${ORCA_L10N_MO_FILES}
+    WORKING_DIRECTORY ${PROJECT_SOURCE_DIR}
+    COMMENT "Generate localization po files (binary) from mo files (texts)"
+)
+
+add_custom_target(orcaslicer_check_translations
+    DEPENDS ${ORCA_L10N_MO_FILES}
+    WORKING_DIRECTORY ${PROJECT_SOURCE_DIR}
+    COMMENT "Check translation files and generate localization binaries"
+)
+
+add_custom_target(orcaslicer_update_translations
+    DEPENDS ${ORCA_L10N_MERGE_STAMPS}
+    WORKING_DIRECTORY ${PROJECT_SOURCE_DIR}
+    COMMENT "Update translation catalog"
+)
+add_dependencies(orcaslicer_update_translations gettext_make_pot)
+
+if (ORCA_TRANSLATIONS_ONLY)
+    return()
+endif ()
 
 if (NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
   message(STATUS "No build type selected, default to Release")
@@ -705,78 +815,6 @@ else ()
     set_target_properties(cereal::cereal PROPERTIES IMPORTED_GLOBAL TRUE)
 endif ()
 
-# l10n
-set(L10N_DIR "${SLIC3R_RESOURCES_DIR}/i18n")
-set(BBL_L18N_DIR "${CMAKE_CURRENT_SOURCE_DIR}/localization/i18n")
-
-if (WIN32)
-    set(GETTEXT_XGETTEXT_EXECUTABLE "${PROJECT_SOURCE_DIR}/tools/xgettext.exe")
-    set(GETTEXT_MSGMERGE_EXECUTABLE "${PROJECT_SOURCE_DIR}/tools/msgmerge.exe")
-    set(GETTEXT_MSGFMT_EXECUTABLE "${PROJECT_SOURCE_DIR}/tools/msgfmt.exe")
-else ()
-    find_program(GETTEXT_XGETTEXT_EXECUTABLE xgettext)
-    find_program(GETTEXT_MSGMERGE_EXECUTABLE msgmerge)
-    find_program(GETTEXT_MSGFMT_EXECUTABLE msgfmt)
-
-    if (NOT GETTEXT_XGETTEXT_EXECUTABLE)
-        set(GETTEXT_XGETTEXT_EXECUTABLE xgettext)
-    endif ()
-
-    if (NOT GETTEXT_MSGMERGE_EXECUTABLE)
-        set(GETTEXT_MSGMERGE_EXECUTABLE msgmerge)
-    endif ()
-
-    if (NOT GETTEXT_MSGFMT_EXECUTABLE)
-        set(GETTEXT_MSGFMT_EXECUTABLE msgfmt)
-    endif ()
-endif ()
-
-add_custom_target(gettext_make_pot
-    COMMAND ${GETTEXT_XGETTEXT_EXECUTABLE} --keyword=L --keyword=_L --keyword=_u8L --keyword=L_CONTEXT:1,2c --keyword=_L_PLURAL:1,2 --add-comments=TRN --from-code=UTF-8 --no-location --debug --boost
-        -f "${BBL_L18N_DIR}/list.txt"
-        -o "${BBL_L18N_DIR}/OrcaSlicer.pot"
-    COMMAND hintsToPot ${SLIC3R_RESOURCES_DIR} ${BBL_L18N_DIR}
-    WORKING_DIRECTORY ${PROJECT_SOURCE_DIR}
-    COMMENT "Generate pot file from strings in the source tree"
-)
-add_custom_target(gettext_merge_po_with_pot
-    WORKING_DIRECTORY ${PROJECT_SOURCE_DIR}
-    COMMENT "Merge localization po with new generated pot file"
-)
-file(GLOB BBL_L10N_PO_FILES "${BBL_L18N_DIR}/*/OrcaSlicer*.po")
-foreach(po_file ${BBL_L10N_PO_FILES})
-    add_custom_command(
-        TARGET gettext_merge_po_with_pot PRE_BUILD
-        COMMAND ${GETTEXT_MSGMERGE_EXECUTABLE} -N -o "${po_file}" "${po_file}" "${BBL_L18N_DIR}/OrcaSlicer.pot"
-        DEPENDS "${po_file}"
-    )
-endforeach()
-add_custom_target(gettext_po_to_mo
-    WORKING_DIRECTORY ${PROJECT_SOURCE_DIR}
-    COMMENT "Generate localization po files (binary) from mo files (texts)"
-)
-file(GLOB L10N_PO_FILES "${BBL_L18N_DIR}/*/OrcaSlicer*.po")
-foreach(po_file ${L10N_PO_FILES})
-    get_filename_component(po_parent_dir "${po_file}" DIRECTORY)
-    get_filename_component(po_dir "${po_parent_dir}" NAME)
-    set(mo_dir "${L10N_DIR}/${po_dir}")
-    set(mo_file "${mo_dir}/OrcaSlicer.mo")
-    add_custom_command(
-        TARGET gettext_po_to_mo PRE_BUILD
-        COMMAND ${CMAKE_COMMAND} -E make_directory "${mo_dir}"
-        COMMAND ${GETTEXT_MSGFMT_EXECUTABLE} --check-format -o "${mo_file}" "${po_file}"
-        #COMMAND ${GETTEXT_MSGFMT_EXECUTABLE} --check-compatibility -o "${mo_file}" "${po_file}"
-        DEPENDS "${po_file}"
-    )
-endforeach()
-
-if (TARGET OrcaSlicer)
-    add_dependencies(OrcaSlicer gettext_po_to_mo)
-endif ()
-if (TARGET OrcaSlicer_app_gui)
-    add_dependencies(OrcaSlicer_app_gui gettext_po_to_mo)
-endif ()
-
 find_package(NLopt 1.4 REQUIRED)
 
 
@@ -967,7 +1005,12 @@ add_subdirectory(deps_src)
 add_subdirectory(src)
 set_property(DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR} PROPERTY VS_STARTUP_PROJECT OrcaSlicer_app_gui)
 
-add_dependencies(gettext_make_pot hintsToPot)
+if (TARGET OrcaSlicer)
+    add_dependencies(OrcaSlicer gettext_po_to_mo)
+endif ()
+if (TARGET OrcaSlicer_app_gui)
+    add_dependencies(OrcaSlicer_app_gui gettext_po_to_mo)
+endif ()
 
 if(SLIC3R_BUILD_SANDBOXES)
     add_subdirectory(sandboxes)
@@ -1004,8 +1047,8 @@ elseif (SLIC3R_FHS)
 elseif (CMAKE_MACOSX_BUNDLE)
     # install(DIRECTORY "${SLIC3R_RESOURCES_DIR}/" DESTINATION "${CMAKE_INSTALL_PREFIX}/OrcaSlicer.app/Contents/resources")
 else ()
-    install(FILES src/dev-utils/platform/unix/com.orcaslicer.OrcaSlicer.desktop DESTINATION ${CMAKE_INSTALL_PREFIX}/resources/applications)
-    install(DIRECTORY "${SLIC3R_RESOURCES_DIR}/" DESTINATION "${CMAKE_INSTALL_PREFIX}/resources")
+    install(FILES src/dev-utils/platform/unix/com.orcaslicer.OrcaSlicer.desktop DESTINATION resources/applications)
+    install(DIRECTORY "${SLIC3R_RESOURCES_DIR}/" DESTINATION resources)
 endif ()
 
 if (CMAKE_SYSTEM_NAME STREQUAL "Linux" AND NOT FLATPAK)
@@ -1019,37 +1062,143 @@ if (CMAKE_SYSTEM_NAME STREQUAL "Linux" AND NOT FLATPAK)
         ${LIBDIR_BIN}/libswscale.so.8
         ${LIBDIR_BIN}/libswscale.so.8.1.100
     )
-    install(FILES ${LIBRARY_FILES} DESTINATION "${CMAKE_INSTALL_PREFIX}/bin")
+    install(FILES ${LIBRARY_FILES} DESTINATION "${CMAKE_INSTALL_BINDIR}")
+endif ()
+
+option(ORCA_BMCU_LINUX_PACKAGE "Enable Linux package entries for BMCU builds" OFF)
+set(ORCA_CPACK_DIST_ID "" CACHE STRING "Distribution id used in generated Linux package names")
+set(ORCA_CPACK_FILE_VERSION "" CACHE STRING "Version string used in generated Linux package filenames")
+set(ORCA_CPACK_PACKAGE_VERSION "" CACHE STRING "Version string used inside generated Linux packages")
+set(ORCA_CPACK_ARCH "" CACHE STRING "Architecture string used in generated Linux package filenames")
+
+if (CMAKE_SYSTEM_NAME STREQUAL "Linux" AND ORCA_BMCU_LINUX_PACKAGE)
+    set(ORCA_BMCU_WRAPPER "${CMAKE_CURRENT_BINARY_DIR}/orca-slicer-bmcu")
+    file(GENERATE
+        OUTPUT "${ORCA_BMCU_WRAPPER}"
+        CONTENT "#!/bin/sh\nexec ${CMAKE_INSTALL_PREFIX}/${CMAKE_INSTALL_BINDIR}/orca-slicer \"$@\"\n"
+    )
+    install(PROGRAMS "${ORCA_BMCU_WRAPPER}" DESTINATION "/usr/bin")
 endif ()
 
 install(FILES ${CMAKE_SOURCE_DIR}/LICENSE.txt DESTINATION ".")
 configure_file(${LIBDIR}/dev-utils/platform/unix/fhs.hpp.in ${LIBDIR_BIN}/dev-utils/platform/unix/fhs.hpp)
 
-set (CPACK_PACKAGE_NAME "OrcaSlicer")
-set (CPACK_PACKAGE_VENDOR "SoftFever")
-set (CPACK_PACKAGE_VERSION_MAJOR "${ORCA_VERSION_MAJOR}")
-set (CPACK_PACKAGE_VERSION_MINOR "${ORCA_VERSION_MINOR}")
-set (CPACK_PACKAGE_VERSION_PATCH "${ORCA_VERSION_PATCH}")
-set (CPACK_PACKAGE_FILE_NAME "OrcaSlicer_Windows_Installer_V${SoftFever_VERSION}")
-set (CPACK_PACKAGE_DESCRIPTION_SUMMARY "Orca Slicer is an open source slicer for FDM printers")
-set (CPACK_PACKAGE_HOMEPAGE_URL "https://github.com/OrcaSlicer/OrcaSlicer")
-set (CPACK_PACKAGE_INSTALL_DIRECTORY ${CPACK_PACKAGE_NAME})
-set (CPACK_PACKAGE_ICON "${CMAKE_SOURCE_DIR}/resources/images\\\\OrcaSlicer.ico")
-set (CPACK_NSIS_MUI_ICON "${CPACK_PACKAGE_ICON}")
-set (CPACK_NSIS_MUI_UNIICON "${CPACK_PACKAGE_ICON}")
-set (CPACK_NSIS_INSTALLED_ICON_NAME  "$INSTDIR\\\\orca-slicer.exe")
-set(CPACK_NSIS_EXTRA_INSTALL_COMMANDS "
-    CreateShortCut \\\"$DESKTOP\\\\OrcaSlicer.lnk\\\" \\\"$INSTDIR\\\\orca-slicer.exe\\\"
-")
-set (CPACK_PACKAGE_CHECKSUM SHA256)
-set (CPACK_PACKAGE_INSTALL_REGISTRY_KEY "OrcaSlicer")
-set (CPACK_NSIS_ENABLE_UNINSTALL_BEFORE_INSTALL ON)
-set (CPACK_NSIS_EXECUTABLES_DIRECTORY ".")
-# set (CPACK_NSIS_MODIFY_PATH "ON")
-set(CPACK_PACKAGE_EXECUTABLES "orca-slicer;OrcaSlicer")
-set(CPACK_CREATE_DESKTOP_LINKS "orca-slicer")
-set (CPACK_RESOURCE_FILE_LICENSE ${CMAKE_SOURCE_DIR}/LICENSE.txt) # must also include in install command
+set(CPACK_PACKAGE_NAME "OrcaSlicer")
+set(CPACK_PACKAGE_VENDOR "SoftFever")
+set(CPACK_PACKAGE_VERSION_MAJOR "${ORCA_VERSION_MAJOR}")
+set(CPACK_PACKAGE_VERSION_MINOR "${ORCA_VERSION_MINOR}")
+set(CPACK_PACKAGE_VERSION_PATCH "${ORCA_VERSION_PATCH}")
+set(CPACK_PACKAGE_DESCRIPTION_SUMMARY "Orca Slicer is an open source slicer for FDM printers")
+set(CPACK_PACKAGE_HOMEPAGE_URL "https://github.com/OrcaSlicer/OrcaSlicer")
+set(CPACK_PACKAGE_CHECKSUM SHA256)
+set(CPACK_RESOURCE_FILE_LICENSE ${CMAKE_SOURCE_DIR}/LICENSE.txt) # must also include in install command
 
-set(CPACK_WIX_UPGRADE_GUID "058245e8-20e0-4a95-9ab7-1acfe17ad511")
-set(CPACK_GENERATOR NSIS)
+if (WIN32)
+    set(CPACK_PACKAGE_FILE_NAME "OrcaSlicer_Windows_Installer_V${SoftFever_VERSION}")
+    set(CPACK_PACKAGE_INSTALL_DIRECTORY ${CPACK_PACKAGE_NAME})
+    set(CPACK_PACKAGE_ICON "${CMAKE_SOURCE_DIR}/resources/images\\\\OrcaSlicer.ico")
+    set(CPACK_NSIS_MUI_ICON "${CPACK_PACKAGE_ICON}")
+    set(CPACK_NSIS_MUI_UNIICON "${CPACK_PACKAGE_ICON}")
+    set(CPACK_NSIS_INSTALLED_ICON_NAME  "$INSTDIR\\\\orca-slicer.exe")
+    set(CPACK_NSIS_EXTRA_INSTALL_COMMANDS "
+        CreateShortCut \\\"$DESKTOP\\\\OrcaSlicer.lnk\\\" \\\"$INSTDIR\\\\orca-slicer.exe\\\"
+    ")
+    set(CPACK_PACKAGE_INSTALL_REGISTRY_KEY "OrcaSlicer")
+    set(CPACK_NSIS_ENABLE_UNINSTALL_BEFORE_INSTALL ON)
+    set(CPACK_NSIS_EXECUTABLES_DIRECTORY ".")
+    # set (CPACK_NSIS_MODIFY_PATH "ON")
+    set(CPACK_PACKAGE_EXECUTABLES "orca-slicer;OrcaSlicer")
+    set(CPACK_CREATE_DESKTOP_LINKS "orca-slicer")
+    set(CPACK_WIX_UPGRADE_GUID "058245e8-20e0-4a95-9ab7-1acfe17ad511")
+    set(CPACK_GENERATOR NSIS)
+elseif (CMAKE_SYSTEM_NAME STREQUAL "Linux" AND ORCA_BMCU_LINUX_PACKAGE)
+    if (ORCA_CPACK_DIST_ID STREQUAL "")
+        set(ORCA_CPACK_DIST_ID "linux")
+    endif ()
+    if (ORCA_CPACK_FILE_VERSION STREQUAL "")
+        set(ORCA_CPACK_TAG "$ENV{ORCA_RELEASE_TAG}")
+        if (ORCA_CPACK_TAG STREQUAL "")
+            set(ORCA_CPACK_TAG "$ENV{EVENT_TAG}")
+        endif ()
+        if (ORCA_CPACK_TAG STREQUAL "" AND "$ENV{GITHUB_REF_TYPE}" STREQUAL "tag")
+            set(ORCA_CPACK_TAG "$ENV{GITHUB_REF_NAME}")
+        endif ()
+
+        if (NOT ORCA_CPACK_TAG STREQUAL "")
+            string(REGEX REPLACE "^v" "" ORCA_CPACK_FILE_VERSION "${ORCA_CPACK_TAG}")
+        elseif ("$ENV{GITHUB_ACTIONS}" STREQUAL "true" AND NOT "$ENV{GITHUB_SHA}" STREQUAL "")
+            string(SUBSTRING "$ENV{GITHUB_SHA}" 0 7 ORCA_CPACK_SHORT_SHA)
+            set(ORCA_CPACK_FILE_VERSION "git${ORCA_CPACK_SHORT_SHA}")
+        else ()
+            set(ORCA_CPACK_FILE_VERSION "${SoftFever_VERSION}")
+        endif ()
+    endif ()
+    if (ORCA_CPACK_PACKAGE_VERSION STREQUAL "")
+        set(ORCA_CPACK_PACKAGE_VERSION "${ORCA_CPACK_FILE_VERSION}")
+        if (ORCA_CPACK_FILE_VERSION MATCHES "^git")
+            set(ORCA_CPACK_DEBIAN_PACKAGE_VERSION "0.0~${ORCA_CPACK_FILE_VERSION}~${ORCA_CPACK_DIST_ID}")
+        else ()
+            set(ORCA_CPACK_DEBIAN_PACKAGE_VERSION "${ORCA_CPACK_FILE_VERSION}~${ORCA_CPACK_DIST_ID}")
+        endif ()
+
+        string(REGEX REPLACE "[^A-Za-z0-9._]" "_" ORCA_CPACK_RPM_PACKAGE_VERSION "${ORCA_CPACK_FILE_VERSION}")
+    else ()
+        set(ORCA_CPACK_DEBIAN_PACKAGE_VERSION "${ORCA_CPACK_PACKAGE_VERSION}")
+        set(ORCA_CPACK_RPM_PACKAGE_VERSION "${ORCA_CPACK_PACKAGE_VERSION}")
+    endif ()
+    if (ORCA_CPACK_ARCH STREQUAL "")
+        set(ORCA_CPACK_ARCH "${CMAKE_SYSTEM_PROCESSOR}")
+    endif ()
+    set(ORCA_CPACK_DEBIAN_ARCHITECTURE "${ORCA_CPACK_ARCH}")
+    set(ORCA_CPACK_RPM_ARCHITECTURE "${ORCA_CPACK_ARCH}")
+    if (ORCA_CPACK_ARCH STREQUAL "x86_64")
+        set(ORCA_CPACK_DEBIAN_ARCHITECTURE "amd64")
+    elseif (ORCA_CPACK_ARCH STREQUAL "amd64")
+        set(ORCA_CPACK_RPM_ARCHITECTURE "x86_64")
+    elseif (ORCA_CPACK_ARCH STREQUAL "aarch64")
+        set(ORCA_CPACK_DEBIAN_ARCHITECTURE "arm64")
+    elseif (ORCA_CPACK_ARCH STREQUAL "arm64")
+        set(ORCA_CPACK_RPM_ARCHITECTURE "aarch64")
+    endif ()
+
+    set(CPACK_PACKAGE_NAME "orcaslicer-bmcu")
+    set(CPACK_PACKAGE_VENDOR "OrcaSlicer")
+    set(CPACK_PACKAGE_CONTACT "OrcaSlicer BMCU <orcaslicer-bmcu@users.noreply.github.com>")
+    set(CPACK_PACKAGE_VERSION "${ORCA_CPACK_PACKAGE_VERSION}")
+    set(CPACK_PACKAGE_FILE_NAME "OrcaSlicer-BMCU_${ORCA_CPACK_DIST_ID}_${ORCA_CPACK_ARCH}_${ORCA_CPACK_FILE_VERSION}")
+    set(CPACK_PACKAGE_DESCRIPTION_SUMMARY "OrcaSlicer BMCU build")
+    set(CPACK_SET_DESTDIR ON)
+    set(CPACK_STRIP_FILES OFF)
+    set(CPACK_ARCHIVE_FILE_NAME "OrcaSlicer-BMCU_LinuxDir_${ORCA_CPACK_DIST_ID}_${ORCA_CPACK_ARCH}_${ORCA_CPACK_FILE_VERSION}")
+    set(CPACK_ARCHIVE_THREADS 0)
+
+    set(CPACK_DEBIAN_FILE_NAME "${CPACK_PACKAGE_FILE_NAME}.deb")
+    set(CPACK_DEBIAN_PACKAGE_ARCHITECTURE "${ORCA_CPACK_DEBIAN_ARCHITECTURE}")
+    set(CPACK_DEBIAN_PACKAGE_MAINTAINER "OrcaSlicer BMCU <orcaslicer-bmcu@users.noreply.github.com>")
+    set(CPACK_DEBIAN_PACKAGE_VERSION "${ORCA_CPACK_DEBIAN_PACKAGE_VERSION}")
+    set(CPACK_DEBIAN_PACKAGE_DEPENDS "libc6, libstdc++6, libgcc-s1")
+    set(CPACK_DEBIAN_PACKAGE_SHLIBDEPS ON)
+    set(CPACK_DEBIAN_PACKAGE_SHLIBDEPS_PRIVATE_DIRS "/opt/orcaslicer/bin;/opt/orcaslicer/lib;/opt/orcaslicer/lib64")
+
+    set(CPACK_RPM_FILE_NAME "${CPACK_PACKAGE_FILE_NAME}.rpm")
+    set(CPACK_RPM_PACKAGE_ARCHITECTURE "${ORCA_CPACK_RPM_ARCHITECTURE}")
+    set(CPACK_RPM_PACKAGE_VERSION "${ORCA_CPACK_RPM_PACKAGE_VERSION}")
+    set(CPACK_RPM_PACKAGE_LICENSE "AGPL-3.0")
+    set(CPACK_RPM_PACKAGE_GROUP "Applications/Engineering")
+    set(CPACK_RPM_PACKAGE_AUTOREQ ON)
+
+    add_custom_target(OrcaSlicer_AppImage
+        COMMAND "${CMAKE_COMMAND}" -E make_directory "${CMAKE_SOURCE_DIR}/out"
+        COMMAND "${CMAKE_BINARY_DIR}/src/build_linux_image.sh" -i -R "$<CONFIG>"
+        COMMAND "${CMAKE_COMMAND}" -E rename
+            "${CMAKE_BINARY_DIR}/OrcaSlicer_Linux_V${SoftFever_VERSION}.AppImage"
+            "${CMAKE_SOURCE_DIR}/out/OrcaSlicer-BMCU_Linux_AppImage_${ORCA_CPACK_DIST_ID}_${ORCA_CPACK_ARCH}_${ORCA_CPACK_FILE_VERSION}.AppImage"
+        DEPENDS OrcaSlicer orcaslicer_check_translations
+        WORKING_DIRECTORY "${CMAKE_BINARY_DIR}"
+        COMMENT "Build OrcaSlicer AppImage"
+        VERBATIM
+    )
+
+    set(CPACK_GENERATOR "TGZ;DEB;RPM")
+endif ()
 include(CPack)

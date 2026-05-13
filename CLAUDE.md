@@ -8,53 +8,24 @@ OrcaSlicer is an open-source 3D slicer application forked from Bambu Studio, bui
 
 ## Build Commands
 
-### Building on Windows
-**Always use this command to build the project when testing build issues on Windows.**
+Use out-of-source builds. Configure dependencies first when building a fresh tree:
 ```bash
-cmake --build . --config %build_type% --target ALL_BUILD -- -m
+cmake -S deps -B deps/build -G Ninja -DCMAKE_POLICY_VERSION_MINIMUM=3.5
+cmake --build deps/build
+cmake -S . -B build -DCMAKE_BUILD_TYPE=RelWithDebInfo
+cmake --build build --config RelWithDebInfo --target all --parallel
 ```
 
-### Building on macOS
-**Always use this command to build the project when testing build issues on macOS.**
-```bash
-cmake --build build/arm64 --config RelWithDebInfo --target all --
-```
-
-### Building on Linux
- **Always use this command to build the project when testing build issues on Linux.**
-```bash
-cmake --build build/arm64 --config RelWithDebInfo --target all --
-
-```
-### Build test:
-
-**Always use this command to build the project when testing build issues on Windows.**
-```bash
-cmake --build . --config %build_type% --target ALL_BUILD -- -m
-```
-
-### Building on macOS
-**Always use this command to build the project when testing build issues on macOS.**
-```bash
-cmake --build build/arm64 --config RelWithDebInfo --target all --
-```
-
-### Building on Linux
- **Always use this command to build the project when testing build issues on Linux.**
-```bash
-cmake --build build --config RelWithDebInfo --target all --
-
-```
-
+Linux system dependencies are installed with `./build_linux.sh -u`; use `./build_linux.sh -g -istrlL` for a GitHub Actions-like Linux container build. Release packaging is driven by the CMake workflow/package presets in `CMakePresets.json`; macOS and Windows helpers still set platform toolchain defaults around the same CMake/CPack flow.
 
 ### Build System
-- Uses CMake with minimum version 3.13 (maximum 3.31.x on Windows)
+- Uses CMake with minimum version 3.13; CI packaging presets require CMake 3.25 or newer
 - Primary build directory: `build/`
 - Dependencies are built in `deps/build/`
 - The build process is split into dependency building and main application building
-- Windows builds use Visual Studio generators
-- macOS builds use Xcode by default, Ninja with -x flag
-- Linux builds use Ninja generator
+- Windows builds use Visual Studio generators and CPack/NSIS for installers
+- macOS builds use Xcode by default, Ninja with the `-x` wrapper flag
+- Linux release packaging is exposed through CMake workflow/package presets in `CMakePresets.json`
 
 ### Testing
 Tests are located in the `tests/` directory and use the Catch2 testing framework. Test structure:
@@ -147,7 +118,7 @@ ctest --test-dir ./tests/sla_print/sla_print_tests
 ### Internationalization and Localization  
 - `localization/i18n/` - Source translation files (.pot, .po)
 - `resources/i18n/` - Runtime language resources
-- Translation managed via `scripts/run_gettext.sh` / `scripts/run_gettext.bat`
+- Translation checks and `.mo` generation use the `orcaslicer_check_translations` target; catalog refreshes use `orcaslicer_update_translations`. Presets `translations-check` and `translations-update` configure only translation maintenance targets.
 
 ### Platform-Specific Code
 - `src/libslic3r/Platform.cpp` - Platform abstractions and utilities
@@ -158,7 +129,7 @@ ctest --test-dir ./tests/sla_print/sla_print_tests
 ### Build and Development Tools
 - `cmake/modules/` - Custom CMake find modules and utilities
 - `scripts/` - Python utilities for profile generation and validation  
-- `tools/` - Windows build tools (gettext utilities)
+- `tools/` - Windows build tools and bundled gettext utilities
 - `deps/` - External dependency build configurations
 
 ## Development Workflow
