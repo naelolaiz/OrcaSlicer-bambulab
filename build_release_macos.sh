@@ -204,7 +204,7 @@ build_deps() {
                 mkdir -p "$DEPS"
                 cd "$DEPS_BUILD_DIR"
                 if [ "1." != "$BUILD_ONLY". ]; then
-                    cmake "${DEPS_DIR}"                         -G "${DEPS_CMAKE_GENERATOR}"                         -DCMAKE_BUILD_TYPE="$BUILD_CONFIG"                         -DCMAKE_OSX_ARCHITECTURES:STRING="${_ARCH}"                         -DCMAKE_OSX_DEPLOYMENT_TARGET="${OSX_DEPLOYMENT_TARGET}"                         -DCMAKE_IGNORE_PREFIX_PATH="${CMAKE_IGNORE_PREFIX_PATH}"                         ${CMAKE_POLICY_COMPAT}
+                    cmake "${DEPS_DIR}"                         -G "${DEPS_CMAKE_GENERATOR}"                         -DCMAKE_BUILD_TYPE="$BUILD_CONFIG"                         -DCMAKE_OSX_ARCHITECTURES:STRING="${_ARCH}"                         -DCMAKE_OSX_DEPLOYMENT_TARGET="${OSX_DEPLOYMENT_TARGET}"                         -DCMAKE_IGNORE_PREFIX_PATH="${CMAKE_IGNORE_PREFIX_PATH}"                         ${CMAKE_COMPILER_LAUNCHER:+-DCMAKE_C_COMPILER_LAUNCHER="$CMAKE_COMPILER_LAUNCHER" -DCMAKE_CXX_COMPILER_LAUNCHER="$CMAKE_COMPILER_LAUNCHER"}                         ${CMAKE_POLICY_COMPAT}
                 fi
                 cmake --build . --config "$BUILD_CONFIG" --target deps
             )
@@ -234,7 +234,7 @@ build_slicer() {
                 mkdir -p "$PROJECT_BUILD_DIR"
                 cd "$PROJECT_BUILD_DIR"
                 if [ "1." != "$BUILD_ONLY". ]; then
-                    cmake "${PROJECT_DIR}"                         -G "${SLICER_CMAKE_GENERATOR}"                         -DORCA_TOOLS=ON                         ${ORCA_UPDATER_SIG_KEY:+-DORCA_UPDATER_SIG_KEY="$ORCA_UPDATER_SIG_KEY"}                         ${BUILD_TESTS:+-DBUILD_TESTS=ON}                         -DCMAKE_BUILD_TYPE="$BUILD_CONFIG"                         -DCMAKE_OSX_ARCHITECTURES="${_ARCH}"                         -DCMAKE_OSX_DEPLOYMENT_TARGET="${OSX_DEPLOYMENT_TARGET}"                         -DCMAKE_IGNORE_PREFIX_PATH="${CMAKE_IGNORE_PREFIX_PATH}"                         ${CMAKE_POLICY_COMPAT}
+                    cmake "${PROJECT_DIR}"                         -G "${SLICER_CMAKE_GENERATOR}"                         -DORCA_TOOLS=ON                         ${ORCA_UPDATER_SIG_KEY:+-DORCA_UPDATER_SIG_KEY="$ORCA_UPDATER_SIG_KEY"}                         ${BUILD_TESTS:+-DBUILD_TESTS=ON}                         -DCMAKE_BUILD_TYPE="$BUILD_CONFIG"                         -DCMAKE_OSX_ARCHITECTURES="${_ARCH}"                         -DCMAKE_OSX_DEPLOYMENT_TARGET="${OSX_DEPLOYMENT_TARGET}"                         -DCMAKE_IGNORE_PREFIX_PATH="${CMAKE_IGNORE_PREFIX_PATH}"                         ${CMAKE_COMPILER_LAUNCHER:+-DCMAKE_C_COMPILER_LAUNCHER="$CMAKE_COMPILER_LAUNCHER" -DCMAKE_CXX_COMPILER_LAUNCHER="$CMAKE_COMPILER_LAUNCHER"}                         ${CMAKE_POLICY_COMPAT}
                 fi
                 cmake --build . --config "$BUILD_CONFIG" --target "$SLICER_BUILD_TARGET"
                 cmake --install . --config "$BUILD_CONFIG"

@@ -112,6 +112,8 @@ jobs:
             dist_id: ubuntu24.04
     env:
       ORCA_DIST_ID: ${{ matrix.dist_id }}
+      SCCACHE_GHA_ENABLED: "true"
+      CMAKE_COMPILER_LAUNCHER: sccache
 
     steps:
       - *checkout
@@ -123,6 +125,10 @@ jobs:
           cmakeVersion: "~4.3.0"
           useLocalCache: true
           useCloudCache: true
+
+      - &setup_sccache
+        name: Set up sccache
+        uses: mozilla-actions/sccache-action@v0.0.10
 
       - &apt_deps
         name: Install system dependencies
@@ -137,13 +143,15 @@ jobs:
         uses: actions/cache@v5
         with:
           path: ${{ github.workspace }}/deps/build/OrcaSlicer_dep
-          key: linux-${{ env.ORCA_DIST_ID }}-deps-${{ hashFiles('deps/**') }}-v1
+          key: linux-${{ env.ORCA_DIST_ID }}-deps-${{ hashFiles('deps/**', '!deps/build/**') }}-v1
 
       - &build_deps_if_miss
         name: Build dependencies
         if: ${{ steps.cache_deps.outputs.cache-hit != 'true' }}
         run: &build_deps |
-          cmake -S deps -B deps/build -G Ninja -DCMAKE_POLICY_VERSION_MINIMUM=3.5
+          cmake -S deps -B deps/build -G Ninja \
+            -DCMAKE_POLICY_VERSION_MINIMUM=3.5 \
+            ${CMAKE_COMPILER_LAUNCHER:+-DCMAKE_C_COMPILER_LAUNCHER="$CMAKE_COMPILER_LAUNCHER" -DCMAKE_CXX_COMPILER_LAUNCHER="$CMAKE_COMPILER_LAUNCHER"}
           cmake --build deps/build
 
   linux_tests:
@@ -153,10 +161,13 @@ jobs:
     timeout-minutes: 360
     env:
       ORCA_DIST_ID: ubuntu24.04
+      SCCACHE_GHA_ENABLED: "true"
+      CMAKE_COMPILER_LAUNCHER: sccache
 
     steps:
       - *checkout
       - *setup_cmake
+      - *setup_sccache
       - *apt_deps
       - *cache_deps
       - *build_deps_if_miss
@@ -196,11 +207,15 @@ jobs:
     env:
       ORCA_DIST_ID: ${{ matrix.dist_id }}
       EVENT_TAG: ${{ github.event.release.tag_name }}
+      SCCACHE_GHA_ENABLED: "true"
+      CMAKE_COMPILER_LAUNCHER: sccache
 
     steps:
       - *checkout
 
       - *setup_cmake
+
+      - *setup_sccache
 
       - *apt_deps
 
@@ -235,6 +250,8 @@ jobs:
     env:
       ORCA_DIST_ID: fedora41
       EVENT_TAG: ${{ github.event.release.tag_name }}
+      SCCACHE_GHA_ENABLED: "true"
+      CMAKE_COMPILER_LAUNCHER: sccache
 
     steps:
       - *checkout
@@ -244,12 +261,24 @@ jobs:
           dnf install -y \
             bash \
             ca-certificates \
-            sudo
+            sudo \
+            tar \
+            which
 
       - name: Install build dependencies
         run: ./build_linux.sh -u
 
+      - *setup_sccache
+
+      - name: Cache dependencies
+        id: cache_deps
+        uses: actions/cache@v5
+        with:
+          path: ${{ github.workspace }}/deps/build/OrcaSlicer_dep
+          key: linux-${{ env.ORCA_DIST_ID }}-deps-${{ hashFiles('deps/**', '!deps/build/**') }}-v1
+
       - name: Build dependencies
+        if: ${{ steps.cache_deps.outputs.cache-hit != 'true' }}
         run: *build_deps
 
       - name: Build RPM
@@ -271,19 +300,54 @@ jobs:
     timeout-minutes: 180
     env:
       ORCA_DIST_ID: ubuntu24.04
+      SCCACHE_GHA_ENABLED: "true"
+      CMAKE_COMPILER_LAUNCHER: sccache
 
     steps:
       - *checkout
 
-      - *setup_cmake
+      - name: Cache bridge runtime tarballs
+        id: cache_bridge
+        uses: actions/cache@v5
+        with:
+          path: |
+            linux_host_runtime.tar.gz
+            wsl_rootfs.tar.gz
+          key: linux-bridge-${{ hashFiles('tools/pjarczak_bambu_linux_host/**', 'tools/pjarczak_bambu_runtime/rootfs/**', 'src/slic3r/Utils/PJarczakLinuxBridge/**') }}-v1
 
-      - *apt_deps
+      - name: Set up CMake
+        if: steps.cache_bridge.outputs.cache-hit != 'true'
+        uses: lukka/get-cmake@v4.3.2
+        with:
+          cmakeVersion: "~4.3.0"
+          useLocalCache: true
+          useCloudCache: true
 
-      - *cache_deps
+      - name: Set up sccache
+        if: steps.cache_bridge.outputs.cache-hit != 'true'
+        uses: mozilla-actions/sccache-action@v0.0.10
 
-      - *build_deps_if_miss
+      - name: Install system dependencies
+        if: steps.cache_bridge.outputs.cache-hit != 'true'
+        run: |
+          mkdir -p "$GITHUB_WORKSPACE/deps/build/OrcaSlicer_dep"
+          sudo env "ORCA_UPDATER_SIG_KEY=$ORCA_UPDATER_SIG_KEY" ./build_linux.sh -ur
+          sudo chown "$USER" -R ./
+
+      - name: Cache dependencies
+        if: steps.cache_bridge.outputs.cache-hit != 'true'
+        id: cache_deps
+        uses: actions/cache@v5
+        with:
+          path: ${{ github.workspace }}/deps/build/OrcaSlicer_dep
+          key: linux-${{ env.ORCA_DIST_ID }}-deps-${{ hashFiles('deps/**', '!deps/build/**') }}-v1
+
+      - name: Build dependencies
+        if: ${{ steps.cache_bridge.outputs.cache-hit != 'true' && steps.cache_deps.outputs.cache-hit != 'true' }}
+        run: *build_deps
 
       - name: Build runtime archives
+        if: steps.cache_bridge.outputs.cache-hit != 'true'
         run: |
           cmake -E rm -rf build linux_host_runtime.tar.gz wsl_rootfs.tar.gz
           cmake --workflow --preset linux-bridge-runtime
@@ -315,11 +379,15 @@ jobs:
           - x86_64
     env:
       ORCA_UPDATER_SIG_KEY: ${{ secrets.ORCA_UPDATER_SIG_KEY }}
+      SCCACHE_GHA_ENABLED: "true"
+      CMAKE_COMPILER_LAUNCHER: sccache
 
     steps:
       - *checkout
 
       - *setup_cmake
+
+      - *setup_sccache
 
       - name: Download Linux host runtime
         uses: actions/download-artifact@v8
@@ -337,7 +405,15 @@ jobs:
           brew install automake texinfo libtool
           mkdir -p "$GITHUB_WORKSPACE/deps/build/${{ matrix.arch }}"
 
+      - name: Cache macOS deps
+        id: cache_macos_deps
+        uses: actions/cache@v5
+        with:
+          path: ${{ github.workspace }}/deps/build/${{ matrix.arch }}
+          key: macos-${{ matrix.arch }}-deps-${{ hashFiles('deps/**', '!deps/build/**') }}-v1
+
       - name: Build macOS deps
+        if: ${{ steps.cache_macos_deps.outputs.cache-hit != 'true' }}
         run: ./build_release_macos.sh -dx -1 -a ${{ matrix.arch }} -t 11.3
 
       - name: Build macOS app bundle
@@ -443,7 +519,15 @@ jobs:
         shell: pwsh
         run: choco install nsis -y
 
+      - name: Cache Windows deps
+        id: cache_windows_deps
+        uses: actions/cache@v5
+        with:
+          path: ${{ github.workspace }}/deps/build/OrcaSlicer_dep
+          key: windows-deps-${{ hashFiles('deps/**', '!deps/build/**') }}-v1
+
       - name: Build Windows deps
+        if: ${{ steps.cache_windows_deps.outputs.cache-hit != 'true' }}
         working-directory: ${{ github.workspace }}
         env:
           WindowsSdkDir: 'C:\Program Files (x86)\Windows Kits\10\'
